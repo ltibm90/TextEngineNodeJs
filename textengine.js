@@ -209,7 +209,6 @@ Common.ComputeActions = class ComputeActions
     {		
         let res = null;
         let name = item.Value;
-
         if (localvars != null)
         {
             res = ComputeActions.GetProp(name, localvars);
@@ -240,7 +239,7 @@ Common.ComputeActions = class ComputeActions
         {
             return vars.Get(item);
         }
-		else if (is_array(vars) || is_object(vars))
+		else if (is_array(vars) || is_object(vars) || is_string(vars))
         {
 			let aresult = vars[item];
 			if(aresult == undefined) return null;
@@ -575,11 +574,12 @@ Common.PhpFunctions = class PhpFunctions
 	}
 	static is_string(item)
 	{
-		return item instanceof String;
+		return typeof item == "string";
 	}
 	static in_array(needle, haystack, strict) {
 		var found = false, key, strict = !!strict;
 		for (key in haystack) {
+
 			if ((strict && haystack[key] === needle) || (!strict && haystack[key] == needle)) {
 				found = true;
 				break;
@@ -597,7 +597,7 @@ Common.PhpFunctions = class PhpFunctions
 	}
 	static isset(item)
 	{
-		return (typeof require !== 'undefined');
+		return (typeof item != 'undefined');
 	}
 }
 //End Common/Utils/PhpFunctions.js
@@ -1267,6 +1267,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                             }
                             else if(is_string(prop))
                             {
+
                                 let indis = parseInt(subresult.Result.GetItem(0));
                                 currentitemvalue = prop[indis];
                             }
@@ -1855,7 +1856,6 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
         {
             return null;
         }
-		
         let startres = null;
         if (startAttr != null)
         {
@@ -2301,6 +2301,7 @@ TextEngine.Evulator.JSEvulator = class JSEvulator extends TextEngine.Evulator.Ba
 		let inner = tag.InnerText();
 		if(istext == "1")
 		{
+		
 			eval(codeText + "result.TextContent = `" + inner + "`");
 		}
 		else
@@ -2727,7 +2728,7 @@ TextEngine.TextElement = class TextElement
 	{
 		if(this.SubElementsCount > 0)
 		{
-			return this.SubElements[0];
+			return this.SubElements.GetItem(0);
 		}
 		return null;
 	}
@@ -2735,7 +2736,7 @@ TextEngine.TextElement = class TextElement
 	{
 		if(this.SubElementsCount > 0)
 		{
-			return this.SubElements[this.SubElementsCount - 1];
+			return this.SubElements.GetItem(this.SubElementsCount - 1);
 		}
 		return null;
 	}
@@ -2986,7 +2987,7 @@ TextEngine.TextElement = class TextElement
         }
         NextElementWN()
         {
-            let next = this.NextElement();
+            let next = this.NextElement();			
             while (next != null)
             {
                 if (next.ElementType == TextEngine.TextElementType.Parameter || next.ElemName == "#text")
@@ -2994,7 +2995,7 @@ TextEngine.TextElement = class TextElement
                     next = next.NextElement();
                     continue;
                 }
-                if (in_array(next.ElemName, arguments))
+                if (in_array(next.ElemName.toLowerCase(), arguments))
                 {
                     return next;
                 }
@@ -3006,7 +3007,7 @@ TextEngine.TextElement = class TextElement
         {
             if (this.Index - 1 >= 0)
             {
-                return this.Parent.SubElements[this.Index - 1];
+                return this.Parent.SubElements.GetItem(this.Index - 1);
             }
             return null;
         }
@@ -3014,7 +3015,7 @@ TextEngine.TextElement = class TextElement
         {
             if (this.Index + 1 < this.Parent.SubElementsCount)
             {
-                return this.Parent.SubElements[this.Index + 1];
+                return this.Parent.SubElements.GetItem(this.Index + 1);
             }
             return null;
         }
@@ -3022,7 +3023,7 @@ TextEngine.TextElement = class TextElement
         {
             for (let i = 0; i < this.SubElementsCount; i++)
             {
-                if (in_array(this.SubElements.GetItem(i).ElemName, arguments))
+                if (in_array(this.SubElements.GetItem(i).ElemName.toLowerCase(), arguments))
                 {
                     return this.SubElements.GetItem(i);
                 }
@@ -5973,5 +5974,3 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 if(typeof module != "undefined") module.exports = TextEngine;
 //End TextEngine\te_end.js
 
-global.Common = Common;
-global.ParDecoder = ParDecoder;
