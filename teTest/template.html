@@ -1,0 +1,79 @@
+<html>
+	{include name="'template_macro.html'"}
+	<head>
+		<meta charset="UTF-8"> 
+		<title>{%title}</title>
+	</head>
+	<div>
+		<h3>Kullanıcı Bilgileri: {%user.Name}</h3>
+	</div>
+	<div>
+		<b>Kayıt Tarhi:</b> {%user.RegisterDate}
+	</div>
+	<div>
+		<b>Referans:</b> {%user.GetReferrer()}
+	</div>
+	<div>
+		<b>Grup:</b> {%user.GetGroup()}
+	</div>
+	<br>
+	{if user.HasCustomInformations()}
+		<div>Kullanıcı Tanımlı Bilgiler</div>
+		{foreach var='info' in='user.Informations'}
+				<div>{%loop_count + 1}: <b>{%loop_key}</b> {%info}</div>
+		{/foreach}
+	{/if}<br>
+	Kullanıcı İşlemleri
+	{switch c='currentUser.Access'}
+		{case v='1'}
+			<div>Kullanıcıyı Düzenle</div>
+		{/case}
+		{case v='2'}
+			<div>Kullanıcıyı Düzenle - Kullanıcıyı Yasakla</div>
+		{/case}
+		{default}
+			<div>Herhangi Bir Yetkiniz Yok</div>
+		{/default}
+	{/switch}
+	
+	{include name="'template_footer.html'"}
+	{include name="'template_online.html'"}
+	<br>
+	<div>XPath Deneme Blokları</div>
+	1. Blok<br>
+	{include name="'template_blocks.html'" xpath='//block[@name="block1"]'}
+	<br><br>
+	2. Blok<br>
+	{include name="'template_blocks.html'" xpath='//block[@name="block2"]'}
+	<br><br>
+	3. Blok<br>
+	{include name="'template_blocks.html'" xpath='//block[@name="block3"]'}
+	<br><br>
+	
+	Tüm tip blokları<br>
+	{include name="'template_blocks.html'" xpath='//block[@type]'}
+	
+	<br>
+	JS Text Örneği <br>
+	{JS @text=1 username='user.Name' grup='user.GetGroup()'}
+		Kullanıcı adı: <b>${username}</b>, Grup: <b>${grup}</b>
+	{/JS}
+	<br>
+	<br>
+	JS Kod Örneği<br>
+	{JS username='user.Name' grup='user.GetGroup()'}
+		text = "Kullanıcı Adı: <b>" + username + "</b><br>";
+		if(isset(grup))
+		{
+			text += "Grup: <b>" + grup + "</b><br>";
+		}
+		let deger = "Cyber-Warrior.Org";
+		text += "JS Kodu ile değer girildi: <b>" + deger + "</b><br>";
+		this.SetKeyValue("js_keyvalue", deger);
+		
+		//Değer kaldırıldı
+	{/JS}
+	
+	JS Tarafında Girilen KeyValue:<b> {%js_keyvalue}</b>
+	
+</html>
