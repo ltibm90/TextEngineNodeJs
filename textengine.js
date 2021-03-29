@@ -296,6 +296,10 @@ Common.Extensions = class Extensions
 		{
 			return item.match("^[A-Za-z0-9]+$");
 		}
+		String.prototype.IsBool = function()
+		{
+			return this == "true" || this == "false";
+		}
 	}
 }
 
