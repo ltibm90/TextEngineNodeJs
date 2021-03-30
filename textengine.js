@@ -1440,8 +1440,8 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                         if (state)
                         {
                             lastvalue = true;
-                            if (opstr != "|")
-                            {
+                            /*if (opstr != "|")
+                            {*/
                                 if (this.IsObject())
                                 {
                                     cr.Result.First()[waitkey] = true;
@@ -1451,7 +1451,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                                     cr.Result.AddObject(waitkey, true);
                                 }
                                 return cr;
-                            }
+                            //}
                         }
                         else
                         {
@@ -3833,7 +3833,7 @@ TextEngine.TextEvulator = class TextEvulator
 {
 	constructor(text = null, isfile = false)
 	{
-		this.Text = "";
+		this._text = "";
         this.Elements = new TextEngine.TextElement();
 		this.Elements.ElemName = "#document";
 		this.Elements.ElementType = TextEngine.TextElementType.Document;
@@ -3881,6 +3881,16 @@ TextEngine.TextEvulator = class TextEvulator
         {
             this.SetDir(File.GetDirName(text));
         }
+		this.NeedParse = true;
+	}
+	get Text()
+	{
+		return this._text;
+	}
+	set Text(value)
+	{
+		this._text = value;
+		this.NeedParse = true;
 	}
 	get EvulatorTypes()
 	{
@@ -3988,8 +3998,8 @@ TextEngine.TextEvulator = class TextEvulator
 		else
 		{
 			parser.Parse(this.Elements, this.Text);
+			this.NeedParse = false;
 		}
-
     }
     SetDir(dir)
     {
@@ -4010,6 +4020,11 @@ TextEngine.TextEvulator = class TextEvulator
         this.Elements.ElemName = "#document";
         this.Elements.ElementType = TextEngine.TextElementType.Document;
     }
+    EvulateValue(vars = null, autoparse = true)
+	{
+		if (autoparse && this.NeedParse) this.Parse();
+		return this.Elements.EvulateValue(0, 0, vars);
+	}
 }
 //End TextEngine/Text/TextEvulator.js
 
