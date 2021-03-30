@@ -110,7 +110,6 @@ Common.ComputeActions = class ComputeActions
             "and",
             "&&",
             "||",
-            "|",
             "==",
             "=",
             ">",
