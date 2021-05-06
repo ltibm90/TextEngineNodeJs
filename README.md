@@ -229,3 +229,47 @@
             let result = evulator.Elements.EvulateValue().TextContent;
 						console.log(result);
 ```
+## WhileEvulator Usage
+```js
+	class WhileTestClass
+	{
+	    constructor()
+	    {
+		this.Items = [];
+		this.Position = -1;
+	    }
+	    Next()
+	    {
+		return ++this.Position < this.Items.length;
+	    }
+	    Get()
+	    {
+		return this.Items[this.Position];
+	    }
+	}
+	    let wtc = new WhileTestClass();
+            wtc.Items.push("Item1");
+            wtc.Items.push("Item2");
+            wtc.Items.push("Item3");
+            wtc.Items.push("Item4");
+            wtc.Items.push("Item5");
+            wtc.Items.push("Item6");
+            let evulator = new TextEngine.TextEvulator();
+            evulator.LeftTag = '[';
+            evulator.RightTag = ']';
+            evulator.ParamNoAttrib = true;
+            evulator.Text = "[while Next()][%loop_count + 1]: -[%Get()][/while]";
+            evulator.GlobalParameters = wtc;
+	    //Output: 1: -Item12: -Item23: -Item34: -Item45: -Item56: -Item6
+            let result = evulator.EvulateValue().TextContent;
+```
+## DoEvulator Usage
+```js
+            let evulator = new TextEngine.TextEvulator();
+            evulator.LeftTag = '[';
+            evulator.RightTag = ']';
+            evulator.ParamNoAttrib = true;
+            evulator.Text = "[do loop_count == 0 || loop_count < 5]Do: [%loop_count][/do]";
+	    //Output: Do: 0Do: 1Do: 2Do: 3Do: 4Do: 5
+            let result = evulator.EvulateValue().TextContent;
+```
