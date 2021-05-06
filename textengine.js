@@ -128,6 +128,7 @@ Common.ComputeActions = class ComputeActions
 	{
 
 		if (is_object(item1) || is_object(item2)) {
+			if(is_object(item1) && item2 == -1) return item1;
 			return null;
 		}
 		
@@ -723,7 +724,22 @@ ParDecoder.ParDecode = class ParDecode
 		this.pos = 0;
 		this.Items = new ParDecoder.ParItem();
 		this.Items.ParName = "(";
+		this.Items.BaseDecoder = this;
 		this.SurpressError = false;
+		this.OnGetFlags = null;
+		this.OnSetFlags = null;
+		this.flags = 0;
+		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
+	}
+	get Flags()
+	{
+		if(this.OnGetFlags != null) return this.OnGetFlags.apply();
+		return this.flags;
+	}
+	set Flags(value)
+	{
+		if (this.OnSetFlags != null && this.OnSetFlags.apply(value)) return;
+		this.flags = value;
 	}
 	get TextLength()
 	{
@@ -741,7 +757,7 @@ ParDecoder.ParDecode = class ParDecode
             {
                 prev = this.Text[i - 1];
             }
-            if ((prev != ')' && prev != ']' && prev != '}') && (cur == '=' || cur == '>' || cur == '<' || cur == '?' || cur == ':'))
+            if (false && (prev != ')' && prev != ']' && prev != '}') && (cur == '=' || cur == '>' || cur == '<' || cur == '?' || cur == ':'))
             {
                 if (isopened)
                 {
@@ -873,7 +889,7 @@ ParDecoder.ParDecode = class ParDecode
                         }
                         else
                         {
-                            this.pos = i - 1;
+                            this.pos = i;
                         }
                         return innerItems;
                     }
@@ -901,7 +917,7 @@ ParDecoder.ParDecode = class ParDecode
                         qutochar = '\0';
                         if (valuestr == "=" || valuestr == "<=" || valuestr == ">=" || valuestr == "<" || valuestr == ">" || valuestr == "!=" || valuestr == "==")
                         {
-                            this.pos = i - 1;
+                            this.pos = i;
                             return innerItems;
                         }
 
@@ -990,6 +1006,7 @@ ParDecoder.ParFormat = class ParFormat
 		}
 		this.FormatItems = null;
 		this.SurpressError = false;
+		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
 	}
 	get Text()
 	{
@@ -1021,6 +1038,7 @@ ParDecoder.ParFormat = class ParFormat
                 if (item.ParData == null)
                 {
                     item.ParData = new ParDecoder.ParDecode(item.ItemText);
+					item.ParData.OnGetFlags = function() {return this.Flags};
                     item.ParData.Decode();
                     item.ParData.SurpressError = this.SurpressError;
                 }
@@ -1189,6 +1207,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         let waitkey = "";
         let unlemused = false;
         let stopdoubledot = false;
+		let minuscount = 0;
         if (this.IsObject())
         {
             cr.Result.AddObject(new Object());
@@ -1241,44 +1260,60 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 
                     if (paritem.ParName == "(")
                     {
-                        if (paritem.BaseDecoder != null && paritem.BaseDecoder.SurpressError)
-                        {
-                            try
-                            {
-                                currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
-                            }
-                            catch
-                            {
+						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowMethodCall)
+						{
+							if (paritem.BaseDecoder != null && paritem.BaseDecoder.SurpressError)
+							{
+								try
+								{
+									currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
+								}
+								catch
+								{
 
-                                currentitemvalue = null;
-                            }
-                        }
-                        else
-                        {
-                            currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
-                        }
+									currentitemvalue = null;
+								}
+							}
+							else
+							{
+								currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
+							}
+						}
+						else
+						{
+							//currentitemvalue = null;
+						}
+
                     }
                     else if (paritem.ParName == "[")
                     {
-                        let prop = Common.ComputeActions.GetProp(prevvalue, varnew);
-                        if (prop != null)
-                        {
-                            if (is_array(prop))
-                            {
-                                let indis = parseInt(subresult.Result.GetItem(0));
-                                currentitemvalue = prop[indis];
-                            }
-                            else if(is_string(prop))
-                            {
-
-                                let indis = parseInt(subresult.Result.GetItem(0));
-                                currentitemvalue = prop[indis];
-                            }
-							else
+						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowArrayAccess)
+						{
+							let prop = Common.ComputeActions.GetProp(prevvalue, varnew);
+							if (prop != null)
 							{
-								//currentitemvalue = prop;
+								if (is_array(prop))
+								{
+									let indis = parseInt(subresult.Result.GetItem(0));
+									currentitemvalue = prop[indis];
+								}
+								else if(is_string(prop))
+								{
+
+									let indis = parseInt(subresult.Result.GetItem(0));
+									currentitemvalue = prop[indis];
+								}
+								else
+								{
+									//currentitemvalue = prop;
+								}
 							}
-                        }
+						}
+						else
+						{
+							//currentitemvalue = null;
+						}
+
                     }
                 }
                 else
@@ -1314,7 +1349,18 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                 }
                 else
                 {
-
+					if(previtem != null && previtem.IsOperator)
+					{
+						if(current.Value == "+")
+						{
+							continue;
+						}
+						else if (current.Value == "-")
+						{
+							minuscount++;
+							continue;
+						}
+					}
                     currentitemvalue = current.Value;
 
                 }
@@ -1359,12 +1405,16 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                 {
                     if (waitop2 != "")
                     {
+						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                         waitvalue2 = null;
                         waitop2 = "";
                     }
                     if (waitop != "")
                     {
+						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                         waitvalue = null;
                         waitop = "";
@@ -1398,12 +1448,16 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                 {
                     if (waitop2 != "")
                     {
+						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                         waitvalue2 = null;
                         waitop2 = "";
                     }
                     if (waitop != "")
                     {
+						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                         waitvalue = null;
                         waitop = "";
@@ -1481,7 +1535,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                             lastvalue = true;
                         }
                     }
-                    xoperator = current;
+                    xoperator = null;
                 }
                 else
                 {
@@ -1500,12 +1554,16 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     {
                         if (waitop2 != "")
                         {
+							if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+							minuscount = 0;
                             lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                             waitvalue2 = null;
                             waitop2 = "";
                         }
                         if (waitop != "")
                         {
+							if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+							minuscount = 0;
                             lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                             waitvalue = null;
                             waitop = "";
@@ -1543,10 +1601,20 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     if (xoperator.Value == ".")
                     {
-                        lastvalue = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess)
+						{
+							lastvalue = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+						}
+						else
+						{
+							//lastvalue = null;
+						}
+
                     }
                     else if (nextop != "." && ((xoperator.Value != "+" && xoperator.Value != "-") || nextop == "" || (Common.ComputeActions.PriotiryStop.Contains(nextop))))
                     {
+						if(minuscount % 2 == 1) currentitemvalue = ComputeActions.OperatorResult(currentitemvalue, -1, "*");
+						minuscount = 0;
                         let opresult = Common.ComputeActions.OperatorResult(lastvalue, currentitemvalue, xoperator.Value);
                         lastvalue = opresult;
                     }
@@ -1579,12 +1647,16 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         }
         if (waitop2 != "")
         {
+			if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+			minuscount = 0;
             lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
             waitvalue2 = null;
             waitop2 = "";
         }
         if (waitop != "")
         {
+			if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+			minuscount = 0;
             lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
             waitvalue = null;
             waitop = "";
@@ -1602,6 +1674,16 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
     }
 }
 //End ParDecoder/PDClass/ParItem.js
+
+//Start ParDecoder/PDClass/PardecodeFlags.js
+ParDecoder.PardecodeFlags =  {
+	PDF_Default: 0,
+	PDF_AllowMethodCall: 1,
+	PDF_AllowSubMemberAccess: 2,
+	PDF_AllowArrayAccess: 3
+}
+
+//End ParDecoder/PDClass/PardecodeFlags.js
 
 //Start ParDecoder\pd_end.js
 if(typeof module != "undefined") module.exports = ParDecoder;
@@ -1821,6 +1903,43 @@ TextEngine.Evulator.ContinueEvulator = class ContinueEvulator extends TextEngine
     }
 }
 //End TextEngine/Evulator/ContinueEvulator.js
+
+//Start TextEngine/Evulator/DoEvulator.js
+TextEngine.Evulator.DoEvulator = class DoEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		if ((tag.NoAttrib && String.IsNullOrEmpty(tag.Value)) || (!tag.NoAttrib && String.IsNullOrEmpty(tag.GetAttribute("c")))) return null;
+		this.CreateLocals();
+		let loop_count = 0;
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
+		do
+		{
+			this.SetLocal("loop_count", loop_count++);
+			let cresult = tag.EvulateValue(0, 0, vars);
+			if (cresult == null) continue;
+			result.TextContent += cresult.TextContent;
+			if (cresult.Result == TextEngine.TextEvulateResultEnum.EVULATE_RETURN)
+			{
+				result.Result = TextEngine.TextEvulateResultEnum.EVULATE_RETURN;
+				this.DestroyLocals();
+				return result;
+			}
+			else if (cresult.Result == TextEngine.TextEvulateResultEnum.EVULATE_BREAK)
+			{
+				break;
+			}
+		} while (this.ConditionSuccess(tag));
+		this.DestroyLocals();
+		return result;
+    }
+}
+//End TextEngine/Evulator/DoEvulator.js
 
 //Start TextEngine/Evulator/EvulatorHandler.js
 TextEngine.Evulator.EvulatorHandler = class EvulatorHandler
@@ -2553,6 +2672,43 @@ TextEngine.Evulator.UnsetEvulator = class UnsetEvulator extends TextEngine.Evula
 }
 //End TextEngine/Evulator/UnsetEvulator.js
 
+//Start TextEngine/Evulator/WhileEvulator.js
+TextEngine.Evulator.WhileEvulator = class WhileEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		if ((tag.NoAttrib && String.IsNullOrEmpty(tag.Value)) || (!tag.NoAttrib && String.IsNullOrEmpty(tag.GetAttribute("c")))) return null;
+		this.CreateLocals();
+		let loop_count = 0;
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
+		while (this.ConditionSuccess(tag))
+		{
+			this.SetLocal("loop_count", loop_count++);
+			let cresult = tag.EvulateValue(0, 0, vars);
+			if (cresult == null) continue;
+			result.TextContent += cresult.TextContent;
+			if (cresult.Result == TextEngine.TextEvulateResultEnum.EVULATE_RETURN)
+			{
+				result.Result = TextEngine.TextEvulateResultEnum.EVULATE_RETURN;
+				this.DestroyLocals();
+				return result;
+			}
+			else if (cresult.Result == TextEngine.TextEvulateResultEnum.EVULATE_BREAK)
+			{
+				break;
+			}
+		}
+		this.DestroyLocals();
+		return result;
+    }
+}
+//End TextEngine/Evulator/WhileEvulator.js
+
 //Start TextEngine/Misc/EvulatorTypes.js
 TextEngine.Evulator.EvulatorTypes = class EvulatorTypes
 {
@@ -2651,6 +2807,23 @@ TextEngine.SavedMacros = class SavedMacros
 }
 //End TextEngine/Misc/SavedMacros.js
 
+//Start TextEngine/Misc/SpecialCharType.js
+TextEngine.SpecialCharType =  {
+        /// <summary>
+        /// \ character disabled
+        /// </summary>
+        SCT_NotAllowed: 1,
+        /// <summary>
+        /// e.g(\test, result: test)
+        /// </summary>
+        SCT_AllowedAll: 2,
+        /// <summary>
+        /// e.g(\test\{} result: \test{ 
+        /// </summary>
+        SCT_AllowedClosedTagOnly: 3
+}
+//End TextEngine/Misc/SpecialCharType.js
+
 //Start TextEngine/Text/TextElement.js
 TextEngine.TextElement = class TextElement
 {
@@ -2660,14 +2833,15 @@ TextEngine.TextElement = class TextElement
 		this._elemName = "";
 		this._closed = false;
 		this._value = "";
-		
+		this._baseEvulator = null;
+		this._tagInfo = null;
 		//public
 		this.ParData = null;
 		this.ElementType = TextEngine.TextElementType.ElementNode;
 		this.SubElements = new TextEngine.TextElements();
 		this.ElemAttr = new TextEngine.TextElementAttributes();
 		this.Parent = null;
-		this.BaseEvulator = null;
+
 		this.ElementType = TextEngine.TextElementFlags.TextNode;
 		this.SlashUsed = false;
 		this.DirectClosed = false;
@@ -2677,6 +2851,15 @@ TextEngine.TextElement = class TextElement
 		this.NoAttrib = false;
 		this.TagAttrib = "";
 
+	}
+	get BaseEvulator()
+	{
+		return this._baseEvulator;
+	}
+	set BaseEvulator(value)
+	{
+		this._baseEvulator = value;
+		this._tagInfo = null;
 	}
 	get Depth()
 	{
@@ -2705,6 +2888,7 @@ TextEngine.TextElement = class TextElement
 			}
                     
 		}
+		this._tagInfo = null;
 	}
 	get Closed()
 	{
@@ -2754,6 +2938,21 @@ TextEngine.TextElement = class TextElement
 	}
 	set Index(value)
 	{
+	}
+	get TagInfo()
+	{
+		if (this.BaseEvulator == null) return null;
+		if (this._tagInfo == null && this.ElementType != TextEngine.TextElementType.Parameter)
+		{
+			if (this.BaseEvulator.TagInfos.HasTagInfo(this.ElemName)) this._tagInfo = this.BaseEvulator.TagInfos.Get(this.ElemName);
+			else if (this.BaseEvulator.TagInfos.HasTagInfo("*")) this._tagInfo = this.BaseEvulator.TagInfos.Get("*");
+		}
+		return this._tagInfo;
+	}
+	get TagFlags()
+	{
+		if (this.TagInfo == null) return TextEngine.TextElementFlags.TEF_NONE;
+		return this.TagInfo.Flags;
 	}
 	AddElement(_element)
 	{
@@ -3475,16 +3674,15 @@ TextEngine.TextElement = class TextElement
         }
         GetTagInfo()
         {
-            if (this.BaseEvulator == null) return null;
-            if (this.BaseEvulator.TagInfos.HasTagInfo(this.ElemName)) return this.BaseEvulator.TagInfos.Get(this.ElemName);
-            if (this.BaseEvulator.TagInfos.HasTagInfo("*")) return this.BaseEvulator.TagInfos.Get("*");
-            return null;
+            return this.TagInfo;;
         }
         GetTagFlags()
         {
-            let info = this.GetTagInfo();
-            if (info == null) return TextEngine.TextElementFlags.TEF_NONE;
-            return info.Flags;
+           return this.TagFlags;
+        }
+		HasFlag(flag)
+        {
+            return (this.TagFlags & flag) != 0;
         }
         SetTextTag(closetag = false)
         {
@@ -3679,7 +3877,7 @@ TextEngine.TextElementInfos = class TextElementInfos extends Common.CollectionBa
 	}
 	Get(name)
 	{
-		if (name == "#text") return null;
+		if (String.IsNullOrEmpty(name) || name == "#text") return null;
 		if (this.lastElement != null && name.toLowerCase() == this.lastElement.ElementName)
 		{
 			return this.lastElement;
@@ -3882,6 +4080,7 @@ TextEngine.TextEvulator = class TextEvulator
             this.SetDir(File.GetDirName(text));
         }
 		this.NeedParse = true;
+		this.SpecialCharOption = TextEngine.SpecialCharType.SCT_AllowedAll;
 	}
 	get Text()
 	{
@@ -3958,6 +4157,8 @@ TextEngine.TextEvulator = class TextEvulator
         this.TagInfos.Get("unset").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
         this.TagInfos.Get("if").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
         this.TagInfos.Get("noparse").Flags = TextEngine.TextElementFlags.TEF_NoParse;
+		this.TagInfos.Get("while").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
+		this.TagInfos.Get("do").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
     }
     InitEvulator()
     {
@@ -3978,6 +4179,8 @@ TextEngine.TextEvulator = class TextEvulator
         this.EvulatorTypes.SetType("set",() => new  TextEngine.Evulator.SetEvulator());
         this.EvulatorTypes.SetType("unset",() => new  TextEngine.Evulator.UnsetEvulator());
         this.EvulatorTypes.SetType("include",() => new  TextEngine.Evulator.IncludeEvulator());
+		this.EvulatorTypes.SetType("while",() => new  TextEngine.Evulator.WhileEvulator());
+		this.EvulatorTypes.SetType("do",() => new  TextEngine.Evulator.DoEvulator());
     }
     InitAmpMaps()
     {
@@ -4365,8 +4568,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
         let quotchar = '\0';
         let initial = false;
         let istagattrib = false;
-        let tagattribonly = false;
-        let curFlags = TextEngine.TextElementFlags.TEF_NONE;
         for (let i = this.pos; i < this.TextLength; i++)
         {
             let cur = this.Text[i];
@@ -4417,7 +4618,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         tagElement.ElementType = TextEngine.TextElementType.CDATASection;
                         tagElement.ElemName = "#cdata";
                         namefound = true;
-                        curFlags = TextEngine.TextElementFlags.TEF_NONE;
                         i += 7;
                         continue;
                     }
@@ -4465,10 +4665,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
 
             if ((tagElement.ElementType == TextEngine.TextElementType.Parameter && this.Evulator.ParamNoAttrib)
-                 || (namefound && tagElement.NoAttrib) || (istagattrib && tagattribonly))
+                 || (namefound && tagElement.NoAttrib) || (istagattrib && tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly)))
             {
-                if ((cur != this.Evulator.RightTag && tagElement.ElementType == TextEngine.TextElementType.Parameter) || cur != this.Evulator.RightTag && (cur != '/' && next != this.Evulator.RightTag || (curFlags & TextEngine.TextElementFlags.TEF_DisableLastSlash) != 0))
+                if ((cur != this.Evulator.RightTag && tagElement.ElementType == TextEngine.TextElementType.Parameter) || cur != this.Evulator.RightTag && (cur != '/' && next != this.Evulator.RightTag || tagElement.HasFlag(TextEngine.TextElementFlags.TEF_DisableLastSlash) ))
                 {
+					
                     current.Append(cur);
                     continue;
                 }
@@ -4501,7 +4702,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         istagattrib = false;
 
                     }
-                    else if (currentName.Length > 0 && !tagattribonly)
+                    else if (currentName.Length > 0 && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
                     {
 
                         tagElement.ElemAttr.SetAttribute(currentName.ToString(), current.ToString());
@@ -4536,11 +4737,10 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         namefound = true;
                         tagElement.ElemName = current.ToString();
                         current.Clear();
-                        curFlags = tagElement.GetTagFlags();
                     }
                     if (namefound)
                     {
-                        if (next == this.Evulator.RightTag && (curFlags & TextEngine.TextElementFlags.TEF_DisableLastSlash) == 0)
+                        if (next == this.Evulator.RightTag && (curFlags & !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_DisableLastSlash)))
                         {
                             lastslashused = true;
                         }
@@ -4550,7 +4750,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     {
                         firstslashused = true;
                     }
-                    if ((curFlags & TextEngine.TextElementFlags.TEF_DisableLastSlash) != 0)
+                    if (tagElement.HasFlag(TextEngine.TextElementFlags.TEF_DisableLastSlash))
                     {
                         current.Append(cur);
                     }
@@ -4583,9 +4783,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         tagElement.ElemName = current.ToString();
                         current.Clear();
                         currentName.Clear();
-                        curFlags = tagElement.GetTagFlags();
                         istagattrib = true;
-                        tagattribonly = (curFlags & TextEngine.TextElementFlags.TEF_TagAttribonly) != 0;
                     }
                     continue;
                 }
@@ -4610,7 +4808,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     if (!namefound)
                     {
                         tagElement.ElemName = current.ToString();
-                        tagattribonly = false;
                         current.Clear();
                     }
                     if (tagElement.NoAttrib)
@@ -4622,11 +4819,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         tagElement.TagAttrib = current.ToString();
                         istagattrib = false;
                     }
-                    else if (currentName.Length > 0 && !tagattribonly)
+                    else if (currentName.Length > 0 && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
                     {
                         tagElement.SetAttribute(currentName.ToString(), current.ToString());
                     }
-                    else if (current.Length > 0 && !tagattribonly)
+                    else if (current.Length > 0 && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
                     {
                         tagElement.SetAttribute(current.ToString(), null);
                     }
@@ -4655,8 +4852,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 		
                         namefound = true;
                         tagElement.ElemName = current.ToString();
-                        curFlags = tagElement.GetTagFlags();
-                        tagattribonly = (curFlags & TextEngine.TextElementFlags.TEF_TagAttribonly) != 0;
                         current.Clear();
 
 
@@ -4671,14 +4866,14 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                             current.Clear();
                             istagattrib = false;
                         }
-                        else if (!empty(currentName) && !tagattribonly)
+                        else if (!empty(currentName) && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
                         {
                             tagElement.SetAttribute(currentName.ToString(), current.ToString());
                             currentName.Clear();
                             current.Clear();
                             quoted = false;
                         }
-                        else if (!empty(current) && !tagattribonly)
+                        else if (!empty(current) && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
                         {
                             tagElement.SetAttribute(current.ToString(), null);
                             current.Clear();
@@ -4713,6 +4908,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             if (cur == '\\')
             {
                 inspec = true;
+				if (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedAll ||  (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedClosedTagOnly && next == this.Evulator.RightTag))
+				{
+					inspec = true;
+					continue;
+				}
                 continue;
             }
             if (this.Evulator.AllowCharMap && cur != this.Evulator.LeftTag && cur != this.Evulator.RightTag && this.Evulator.CharMap.Keys.Count > 0)
