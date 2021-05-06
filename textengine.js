@@ -4907,13 +4907,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
             if (cur == '\\')
             {
-                inspec = true;
 				if (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedAll ||  (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedClosedTagOnly && next == this.Evulator.RightTag))
 				{
 					inspec = true;
 					continue;
 				}
-                continue;
             }
             if (this.Evulator.AllowCharMap && cur != this.Evulator.LeftTag && cur != this.Evulator.RightTag && this.Evulator.CharMap.Keys.Count > 0)
             {
