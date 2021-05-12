@@ -2831,10 +2831,10 @@ TextEngine.TextElement = class TextElement
 	{
 		//private
 		this._elemName = "";
-		this._closed = false;
 		this._value = "";
 		this._baseEvulator = null;
 		this._tagInfo = null;
+		this._closeState = TextEngine.TextElementClosedType.TECT_OPEN;
 		//public
 		this.ParData = null;
 		this.ElementType = TextEngine.TextElementType.ElementNode;
@@ -2844,10 +2844,8 @@ TextEngine.TextElement = class TextElement
 
 		this.ElementType = TextEngine.TextElementFlags.TextNode;
 		this.SlashUsed = false;
-		this.DirectClosed = false;
 		this.AutoAdded = false;
 		this.AliasName = "";
-		this.AutoClosed = false;
 		this.NoAttrib = false;
 		this.TagAttrib = "";
 
@@ -2892,15 +2890,27 @@ TextEngine.TextElement = class TextElement
 	}
 	get Closed()
 	{
-		return this._closed;
+		return this.CloseState > 0;
 	}
-	set Closed(value)
+	get CloseState()
 	{
-		this._closed = value;
-		if (this.BaseEvulator != null)
+		return this._closeState;
+	}
+	set CloseState(value)
+	{
+		this._closeState = value;
+		if (this.BaseEvulator != null && value > TextEngine.TextElementClosedType.TECT_OPEN )
 		{
 			this.BaseEvulator.OnTagClosed(this);
 		}
+	}
+	get DirectClosed()
+	{
+		return this.CloseState == TextEngine.TextElementClosedType.TECT_DIRECTCLOSED; 
+	}
+	get AutoClosed()
+	{
+		return this.CloseState == TextEngine.TextElementClosedType.TECT_AUTOCLOSED; 
 	}
 	get Value()
 	{
@@ -2945,7 +2955,7 @@ TextEngine.TextElement = class TextElement
 		if (this._tagInfo == null && this.ElementType != TextEngine.TextElementType.Parameter)
 		{
 			if (this.BaseEvulator.TagInfos.HasTagInfo(this.ElemName)) this._tagInfo = this.BaseEvulator.TagInfos.Get(this.ElemName);
-			else if (this.BaseEvulator.TagInfos.HasTagInfo("*")) this._tagInfo = this.BaseEvulator.TagInfos.Get("*");
+			else if (this.BaseEvulator.TagInfos.Default) this._tagInfo = this.BaseEvulator.TagInfos.Default;
 		}
 		return this._tagInfo;
 	}
@@ -3688,7 +3698,7 @@ TextEngine.TextElement = class TextElement
         {
             this.ElemName = "#text";
             this.ElementType = TextEngine.TextElementType.TextNode;
-            if(closetag) this.Closed = true;
+            if(closetag) this.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
         }
 }
 
@@ -3816,6 +3826,15 @@ TextEngine.TextElementAttributes = class TextElementAttributes extends Common.Co
 }
 //End TextEngine/Text/TextElementAttributes.js
 
+//Start TextEngine/Text/TextElementClosedType.js
+TextEngine.TextElementClosedType =  {
+	TECT_OPEN: 0,
+	TECT_CLOSED: 1,
+	TECT_DIRECTCLOSED: 2,
+	TECT_AUTOCLOSED:  3
+}
+//End TextEngine/Text/TextElementClosedType.js
+
 //Start TextEngine/Text/TextElementEnum.js
 TextEngine.TextElementType =  {
 	ElementNode: 1,
@@ -3847,7 +3866,9 @@ TextEngine.TextElementFlags =  {
 	/// <summary>
 	/// İşaretlenen tagın içeriğini ayrıştırmaz.
 	/// </summary>
-	TEF_NoParse:  1 << 5
+	TEF_NoParse:  1 << 5,
+	TEF_AutoCloseIfSameTagFound: 1 << 6,
+	TEF_PreventAutoCreation: 1 << 7
 }
 
 //End TextEngine/Text/TextElementFlags.js
@@ -3861,6 +3882,9 @@ TextEngine.TextElementInfo = class TextElementInfo
 		this.Flags = 0;
 		//Object
 		this.CustomData = null;
+		this.OnTagOpened = null;
+		this.OnTagClosed = null;
+		this.OnTagAutoCreating = null;
 	}
 }
 
@@ -3874,6 +3898,7 @@ TextEngine.TextElementInfos = class TextElementInfos extends Common.CollectionBa
 		super();
 		this.lastElement = null;
 		this.AutoInitialize = true;
+		this.Default = new TextEngine.TextElementInfo();
 	}
 	Get(name)
 	{
@@ -4145,7 +4170,7 @@ TextEngine.TextEvulator = class TextEvulator
     InitStockTagOptions()
     {
         //* default flags;
-        this.TagInfos.Get("*").Flags = TextEngine.TextElementFlags.TEF_NONE;
+        this.TagInfos.Default.Flags = TextEngine.TextElementFlags.TEF_NONE;
         this.TagInfos.Get("elif").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_NoAttributedTag;
         this.TagInfos.Get("else").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag;
         this.TagInfos.Get("return").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag;
@@ -4251,6 +4276,14 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 	{
 		return this._evulator;
 	}
+	OnTagOpened(element)
+	{
+		if(element.TagInfo && element.TagInfo.OnTagOpened) element.TagInfo.OnTagOpened.apply(element);
+	}
+	OnTagClosed(element)
+	{
+		if(element.TagInfo && element.TagInfo.OnTagClosed) element.TagInfo.OnTagClosed.apply(element);
+	}
     Parse(baseitem, text)
     {
         this.Text = text;
@@ -4275,9 +4308,31 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
             if (!tag.SlashUsed)
             {
+				this.OnTagOpened(tag);
+				if (tag.HasFlag(TextEngine.TextElementFlags.TEF_AutoCloseIfSameTagFound))
+				{
+					let prev = this.GetNotClosedPrevTagWithName(tag, tag.ElemName);
+					if (prev != null && !prev.Closed)
+					{
+						prev.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
+						this.OnTagClosed(prev);
+						currenttag = this.GetNotClosedPrevTag(prev);
+						tag.Parent = currenttag;
+						if (currenttag == null && this.Evulator.ThrowExceptionIFPrevIsNull && !this.Evulator.SurpressError)
+						{
+							this.Evulator.IsParseMode = false;
+							throw new Error("Syntax Error");
+						}
+						else if(currenttag == null)
+						{
+							continue;
+						}
+					}
+				}
                 currenttag.AddElement(tag);
                 if (tag.DirectClosed)
                 {
+					this.OnTagClosed(tag);
                     this.Evulator.OnTagClosed(tag);
                 }
             }
@@ -4293,22 +4348,27 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     if (!prevtag.NameEquals(tag.ElemName, true))
                     {
 						let elem = new TextEngine.TextElement();
-						elem.ElemName
 						elem.ElemName = prevtag.ElemName;
 						elem.ElemAttr = prevtag.ElemAttr.Clone();
 						elem.AutoAdded = true;
 						elem.BaseEvulator = this.Evulator;
-                        prevtag.Closed = true;
-                        if (previtem != null)
-                        {
-                            previtem.Parent = elem;
-                            elem.AddElement(previtem);
-                        }
-                        else
-                        {
-                            currenttag = elem;
-                        }
-                        previtem = elem;
+                        prevtag.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
+						this.OnTagClosed(prevtag);
+						let  allowautocreation = !elem.HasFlag(TextEngine.TextElementFlags.TEF_PreventAutoCreation) && (elem.TagInfo.OnAutoCreating == null || elem.TagInfo.OnAutoCreating(elem));
+						if(allowautocreation)
+						{
+							if (previtem != null)
+							{
+								previtem.Parent = elem;
+								elem.AddElement(previtem);
+							}
+							else
+							{
+								currenttag = elem;
+							}
+							previtem = elem;
+						}
+
 
                     }
                     else
@@ -4327,7 +4387,8 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         {
                             currenttag = prevtag.Parent;
                         }
-                        prevtag.Closed = true;
+						prevtag.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
+						this.OnTagClosed(prevtag);
                         break;
                     }
                     prevtag = this.GetNotClosedPrevTag(prevtag);
@@ -4351,7 +4412,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
         this.noparse_tag = "";
         this.Evulator.IsParseMode = false;
     }
-    GetNotClosedPrevTagUntil(tag, name)
+    GetNotClosedPrevTagsUntil(tag, name)
     {
         let array = new TextEngine.TextElements();
         let stag = this.GetNotClosedPrevTag(tag);
@@ -4366,6 +4427,16 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             stag = this.GetNotClosedPrevTag(stag);
         }
         return array;
+    }
+	GetNotClosedPrevTagWithName(tag, name)
+    {
+		let stag = this.GetNotClosedPrevTag(tag);
+		while (stag != null)
+		{
+			if (stag.ElemName == name) return stag;
+			stag = this.GetNotClosedPrevTag(stag);
+		}
+		return null;
     }
     GetNotClosedPrevTag(tag)
     {
@@ -4485,7 +4556,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                                 throw new Error("Syntax Error");
                             }
                         }
-                        tagElement.AutoClosed = true;
+                        tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
                         tagElement.Value = ampcode;
                         return tagElement;
                     }
@@ -4600,16 +4671,14 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
             if (this.Evulator.AllowXMLTag && cur == '?' && !namefound && current.Length == 0)
             {
-                tagElement.Closed = true;
-                tagElement.AutoClosed = true;
+                tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
                 tagElement.ElementType = TextEngine.TextElementType.XMLTag;
                 continue;
 
             }
             if (this.Evulator.SupportExclamationTag && cur == '!' && !namefound && current.Length == 0)
             {
-                tagElement.Closed = true;
-                tagElement.AutoClosed = true;
+                tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
                 if (i + 8 < this.TextLength)
                 {
                     var mtn = this.Text.Substring(i, 8);
@@ -4638,7 +4707,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             {
                 tagElement.ElementType = TextEngine.TextElementType.CommentNode;
                 tagElement.ElemName = "#summary";
-                tagElement.Closed = true;
+                tagElement.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
                 i += 2;
                 continue;
             }
@@ -4727,7 +4796,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                 if (cur == this.Evulator.ParamChar && !namefound && !firstslashused)
                 {
                     tagElement.ElementType = TextEngine.TextElementType.Parameter;
-                    tagElement.Closed = true;
+					tagElement.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
                     continue;
                 }
                 if (cur == '/')
@@ -4830,15 +4899,13 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     tagElement.SlashUsed = firstslashused;
                     if (lastslashused)
                     {
-                        tagElement.DirectClosed = true;
-                        tagElement.Closed = true;
+                        tagElement.CloseState = TextEngine.TextElementClosedType.TECT_DIRECTCLOSED;
                     }
                     let elname = tagElement.ElemName.toLowerCase();
                     if ((this.Evulator.TagInfos.GetElementFlags(elname) & TextEngine.TextElementFlags.TEF_AutoClosedTag) != 0)
                     {
 
-                        tagElement.Closed = true;
-                        tagElement.AutoClosed = true;
+                        tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
                     }
                     this.pos = i;
                     return;
