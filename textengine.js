@@ -2969,7 +2969,7 @@ TextEngine.Evulator.TextTagCommandEvulator = class TextTagCommandEvulator extend
 		for (let i = 0; i < lines.length; i++)
 		{
 			let line = lines[i];
-			line.trim();
+			line = replace(/\s/g, "");
 			if (String.IsNullOrEmpty(line)) continue;
 			this.EvulateText(line, vars);
 		}
