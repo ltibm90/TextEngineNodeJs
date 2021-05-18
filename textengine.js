@@ -17,6 +17,17 @@ Common.Init = function()
 }
 //End Common\common_globals.js
 
+//Start Common/Utils/AssignResult.js
+Common.AssignResult = class AssignResult
+{
+	constructor()
+	{
+		this.Success = false;
+		this.AssignedValue = null;
+	}
+}
+//End Common/Utils/AssignResult.js
+
 //Start Common/Utils/CollectionBase.js
 Common.CollectionBase = class CollectionBase
 {
@@ -134,8 +145,8 @@ Common.ComputeActions = class ComputeActions
 		
 		if ((operator == "||" || operator == "or" || operator == "&&" || operator == "and") || ( (isNaN(item1) || isNaN(item2)) && (operator == "&" || operator == "|") )) {
 			
-			let lefstate = !empty(item1);
-			let rightstate = !empty(item2);
+			let lefstate = !Empty(item1);
+			let rightstate = !Empty(item2);
 			if (operator == "||" || operator == "|" || operator == "or") {
 				if (lefstate != rightstate) {
 					return true;
@@ -177,43 +188,89 @@ Common.ComputeActions = class ComputeActions
 				return item1 / item2;
 			case '%':
 				return item1 % item2;
+			case '<<':
+				return item1 << item2;
+			case '>>':
+				return item1 << item2;
 			case '^':
 				return pow(item1, item2);
 		}
 		if(!item1) return item2;
 		return item1;
 	}
-	static CallMethodSingle(item, name, mparams)
+	static CallMethodSingle(item, name, mparams, iscalled)
     {
+		iscalled.Success = false;
         if (item == null || item == undefined) return null;
+		if(item instanceof Common.MultiObject)
+		{
+			for (let i = 0; i < vars.Count; i++)
+            {
+				if(vars.Get(i) == null) continue;
+				let r = ComputeActions.CallMethodSingle(vars.Get(i), item, name, mparams, iscalled);
+				if(!iscalled.Success) continue;
+				return r;
+            }
+			return null;
+		}
 		let result = null;
 		if(is_array(item) ||is_object(item))
 		{
 			let val = item[name];
 			if(is_callable(val))
 			{
+				iscalled.Success = true;
 				result = val.apply(item, mparams);
 			}
 		}
         else if(is_callable(item))
         {
+			iscalled.Success = true;
            result = item.apply(null, mparams);
         }
         return result;
     }
-    static CallMethod(name, mparams, vars, localvars = null)
+    static CallMethod(name, mparams, vars, iscalled, localvars = null, sender = null, checkglobal = false)
     {
-        return ComputeActions.CallMethodSingle(vars, name, mparams);
+		iscalled.Success = false;
+		if(sender !== null && checkglobal && sender.Attributes.GlobalFunctions)
+		{
+			let dpos = name.indexOf('::');
+			if(dpos >= 0)
+			{
+				let clsname = name.substr(0, dpos);
+				let method = name.substr(dpos + 2);
+				if(sender.Attributes.GlobalFunctions.indexOf(clsname + "::") >= 0 || sender.Attributes.GlobalFunctions.indexOf(name) >= 0)
+				{
+					if(global[clsname] != undefined && is_callable(global[clsname][method]))
+					{
+						iscalled.Success = true;
+						return global[clsname][method].apply(null, mparams);
+					}
+				}
+			}
+			else
+			{
+				if(sender.Attributes.GlobalFunctions.indexOf(name) >= 0 && is_callable(global[name]))
+				{
+					iscalled.Success = true;
+					return global[name].apply(null, mparams);
+				}
+			}
+			if(dpos >= 0) return null;
+		}
+        return ComputeActions.CallMethodSingle(vars, name, mparams, iscalled);
     }
     static GetPropValue(item, vars, localvars = null)
     {		
-        let res = null;
+
+        let res = null;	
         let name = item.Value;
         if (localvars != null)
         {
             res = ComputeActions.GetProp(name, localvars);
         }
-        if (res == null)
+        if (res == null || res.PropType == Common.PropType.Empty)
         {		
             res = ComputeActions.GetProp(name, vars);
         }
@@ -221,7 +278,20 @@ Common.ComputeActions = class ComputeActions
     }
     static GetProp(item, vars)
     {
-        if (vars == null || vars == undefined) return null;
+		let propObj = new Common.PropObject();
+        if (vars == null || vars == undefined) return propObj;
+		if(vars instanceof Common.MultiObject)
+		{
+			for (let i = 0; i < vars.Count; i++)
+            {
+				if(vars.Get(i) == null) continue;
+				let r = ComputeActions.GetProp(item, vars.Get(i));
+				if(r == null || r.PropType == Common.PropType.Empty) continue;
+				return r;
+            }
+			return propObj;
+		}
+
 		if(vars instanceof Common.KeyValueGroup)
 		{
 			for (let i = vars.Count - 1; i >= 0; i--)
@@ -230,23 +300,62 @@ Common.ComputeActions = class ComputeActions
                 if (curItem instanceof Common.KeyValues)
                 {
                     let m = ComputeActions.GetProp(item, curItem);
-                    if (m != null) return m;
+					if (m != null && m.PropType != Common.PropType.Empty ) return m;
                 }
             }
-            return null;
+            return propObj;
 		}
         if (vars instanceof Common.KeyValues)
         {
-            return vars.Get(item);
+			let id = vars.GetIdByName(item);
+			if(id >= 0)
+			{
+				propObj.Value = vars.GetById(id);
+				propObj.PropType = Common.PropType.KeyValues;
+				propObj.Indis = item;
+				propObj.PropertyInfo = vars;
+			}
         }
 		else if (is_array(vars) || is_object(vars) || is_string(vars))
         {
 			let aresult = vars[item];
-			if(aresult == undefined) return null;
-			return aresult;
+			if(aresult == undefined) aresult = null;
+			propObj.PropertyInfo = vars;
+			propObj.PropType = Common.PropType.Indis;
+			propObj.Value = aresult;
+			propObj.Indis = item;
         }
-        return null;
+        return propObj;
     }
+	
+	static AssignObjectValue(propObj, op, value)
+	{
+
+		let ar = new Common.AssignResult();
+		if (propObj == null || propObj.Indis == null) return ar;
+
+		if (op.length > 1)
+		{
+			value = ComputeActions.OperatorResult(propObj.Value, value, op.substr(0, op.length - 1));
+		}
+		if (propObj.PropType == Common.PropType.Indis)
+		{			
+			propObj.PropertyInfo[propObj.Indis] = value;
+			ar.AssignedValue = value;
+			ar.Success = true;
+		}
+		else if (propObj.PropType == Common.PropType.KeyValues)
+		{
+			propObj.PropertyInfo.Set(item, value);
+			ar.AssignedValue = value;
+			ar.Success = true;
+		}
+		return ar;
+	}
+
+
+	
+
 }
 //End Common/Utils/ComputeActions.js
 
@@ -384,6 +493,10 @@ Common.KeyValues = class KeyValues extends Common.CollectionBase
 		super();
 		this.AutoInitialize = true;
 	}
+	GetById(id)
+	{
+		return this.inner[id].Value;
+	}
 	Get(name)
 	{
 		let id = this.GetIdByName(name);
@@ -448,6 +561,32 @@ Common.Misc = class Misc
 }
 
 //End Common/Utils/MiscFunctions.js
+
+//Start Common/Utils/MultiObject.js
+Common.MultiObject = class MultiObject
+{
+	constructor()
+	{
+		this.inner = [];
+	}
+	get Count()
+	{
+		return this.inner.length;
+	}
+	Add(item)
+	{
+		this.inner.push(item);
+	}
+	Clear()
+	{
+		this.inner = [];
+	}
+	Get(num)
+	{
+		return this.inner[num];
+	}
+}
+//End Common/Utils/MultiObject.js
 
 //Start Common/Utils/NamedObjects.js
 Common.NamedObjects = class NamedObjects
@@ -606,6 +745,27 @@ Common.PhpFunctions = class PhpFunctions
 }
 //End Common/Utils/PhpFunctions.js
 
+//Start Common/Utils/PropObject.js
+Common.PropObject = class PropObject
+{
+	constructor()
+	{
+		this.Value = null;
+		this.PropertyInfo = null;
+		this.Indis = null;
+		this.CustomData = null;
+		this.PropType = Common.PropType.Empty;
+	}
+}
+Common.PropType = {
+	Empty: 0,
+	Property: 1,
+	Dictionary: 2,
+	KeyValues: 3,
+	Indis: 4
+}
+//End Common/Utils/PropObject.js
+
 //Start Common/Utils/StringBuilder.js
 Common.StringBuilder = class StringBuilder
 {
@@ -639,6 +799,34 @@ Common.StringBuilder = class StringBuilder
 	}
 }
 //End Common/Utils/StringBuilder.js
+
+//Start Common/Utils/StringUtils.js
+Common.StringUtils = class StringUtils
+{
+	static SplitLineWithQuote(text)
+	{
+		let all = [];
+		let quotechar = '0';
+		let start = 0;
+		for (let i = 0; i < text.length; i++)
+		{
+			let cur = text[i];
+
+			if (quotechar == '0' && cur == '\'' || cur == '"') quotechar = cur;
+			else if (quotechar != '0' && cur == quotechar) quotechar = '0';
+			let nextN = i + 1 < text.Length && text[i + 1] == '\n';
+			if (quotechar == '0' && (cur == '\n' || (cur == '\r')))
+			{
+				all.push(text.substr(start, i - start));
+				if (nextN) i++;
+				start = i + 1;
+			}
+		}
+		if (start < text.length) all.push(text.substr(start));
+		return all;
+	}
+}
+//End Common/Utils/StringUtils.js
 
 //Start Common\common_end.js
 Common.Init();
@@ -725,21 +913,16 @@ ParDecoder.ParDecode = class ParDecode
 		this.Items = new ParDecoder.ParItem();
 		this.Items.ParName = "(";
 		this.Items.BaseDecoder = this;
-		this.SurpressError = false;
-		this.OnGetFlags = null;
-		this.OnSetFlags = null;
-		this.flags = 0;
-		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
+		this.OnGetAttributes = null;
+		this._attributes = null;
 	}
-	get Flags()
+	get Attributes()
 	{
-		if(this.OnGetFlags != null) return this.OnGetFlags.apply();
-		return this.flags;
-	}
-	set Flags(value)
-	{
-		if (this.OnSetFlags != null && this.OnSetFlags.apply(value)) return;
-		this.flags = value;
+		let attribs = null;
+		if (this.OnGetAttributes != null) attribs = this.OnGetAttributes();
+		if (attribs != null) return attribs;
+		if (this._attributes == null) this._attributes = new ParDecoder.ParDecodeAttributes();
+		return this._attributes;
 	}
 	get TextLength()
 	{
@@ -809,7 +992,7 @@ ParDecoder.ParDecode = class ParDecode
                 parentItem = parentItem.Parent;
                 if (parentItem == null)
                 {
-                    if (this.SurpressError)
+                    if (this.Attributes.SurpressError)
                     {
                         parentItem = this.Items;
                         continue;
@@ -830,6 +1013,7 @@ ParDecoder.ParDecode = class ParDecode
         let qutochar = '\0';
         let innerItems = new ParDecoder.InnerItemsList();
         let value = new Common.StringBuilder();
+		let valDotEntered = false;
         for (let i = start; i < this.TextLength; i++)
         {
             let cur = this.Text[i];
@@ -837,6 +1021,11 @@ ParDecoder.ParDecode = class ParDecode
             if (i + 1 < this.TextLength)
             {
                 next = this.Text[i + 1];
+            }            
+			let next2 = '\0';
+            if (i + 2 < this.TextLength)
+            {
+                next2 = this.Text[i + 2];
             }
             if (inspec)
             {
@@ -871,7 +1060,14 @@ ParDecoder.ParDecode = class ParDecode
                 {
                     if (value.Length > 0)
                     {
+						if(cur == '.' && !valDotEntered && !isNaN(value.ToString()))
+						{
+							valDotEntered = true;
+							value.Append(cur);
+							continue;
+						}
                         innerItems.Add(this.Inner(value.ToString(), qutochar));
+						valDotEntered = false;
                         value.Clear();
                     }
                     if (cur == '[' || cur == '(' || cur == '{')
@@ -898,10 +1094,20 @@ ParDecoder.ParDecode = class ParDecode
                     {
                         let inner2 = new ParDecoder.InnerItem();
 						inner2.IsOperator = true;
-                        if ((cur == '=' && next == '>') || (cur == '!' && next == '=') || (cur == '>' && next == '=') || (cur == '<' && next == '='))
+                        if ((cur == '=' && next == '>') || (cur == '!' && next == '=') || (cur == '>' && next == '=') || (cur == '<' && next == '=')
+							  || (cur == '+' && next == '=') || (cur == '-' && next == '=') || (cur == '*' && next == '=') || (cur == '/' && next == '=') || (cur == '^' && next == '=')
+                                 || (cur == '&' && next == '=') || (cur == '|' && next == '=') || (cur == '%' && next == '=') || (cur == '<' && next == '<')  || (cur == '>' && next == '>') )
                         {
-                            inner2.Value = cur + next;
-                            i++;
+							if (next2 == '=' && ((cur == '<' && next == '<') || (cur == '>' && next == '>')))
+							{
+								inner2.Value = cur + next + next2;
+								i+=2;
+                            }
+							else
+							{
+								inner2.Value = cur + next;
+								i++;
+							}
                         }
                         else if ((cur == '=' || cur == '&' || cur == '|') && cur == next)
                         {
@@ -991,6 +1197,23 @@ ParDecoder.ParDecode = class ParDecode
 }
 //End ParDecoder/PDClass/ParDecode.js
 
+//Start ParDecoder/PDClass/ParDecodeAttributes.js
+ParDecoder.ParDecodeAttributes = class ParDecodeAttributes
+{
+    constructor()
+    {
+		this.Initialise();
+    }
+	Initialise()
+	{
+		this.GlobalFunctions = ['Math::'];
+		this.AssignReturnType = ParDecoder.ParItemAssignReturnType.PIART_RETRUN_BOOL;
+		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
+		this.SurpressError = false;
+	}	
+}
+//End ParDecoder/PDClass/ParDecodeAttributes.js
+
 //Start ParDecoder/PDClass/ParFormat.js
 ParDecoder.ParFormat = class ParFormat
 {
@@ -1005,8 +1228,8 @@ ParDecoder.ParFormat = class ParFormat
 			this._text = "";
 		}
 		this.FormatItems = null;
-		this.SurpressError = false;
-		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
+		this.ParAttributes = new ParDecoder.ParDecodeAttributes();
+		this.ParAttributes.AssignReturnType = ParDecoder.ParItemAssignReturnType.PIART_RETURN_ASSIGNVALUE_OR_NULL;
 	}
 	get Text()
 	{
@@ -1038,9 +1261,9 @@ ParDecoder.ParFormat = class ParFormat
                 if (item.ParData == null)
                 {
                     item.ParData = new ParDecoder.ParDecode(item.ItemText);
-					item.ParData.OnGetFlags = function() {return this.Flags};
+					var self = this;
+					item.ParData.OnGetAttributes = function() {return self.ParAttributes};
                     item.ParData.Decode();
-                    item.ParData.SurpressError = this.SurpressError;
                 }
                 let cr = item.ParData.Items.Compute(data);
                 text.Append(cr.Result.First());
@@ -1053,11 +1276,22 @@ ParDecoder.ParFormat = class ParFormat
         let pf = new ParFormat(s);
         return pf.Apply(data);
     }
+	static FormatEx(s, data = null, onInitialise = null)
+    {
+        let pf = new ParFormat(s);
+		if(is_callable(onInitialise))
+		{
+			onInitialise(pf.ParAttributes);
+		}
+        return pf.Apply(data);
+    }
     ParseFromString(s)
     {
         this.FormatItems = new Common.CollectionBase();
+		let openedPar = 0;
         let text = new Common.StringBuilder();
         let inpar = false;
+		let quotchar = '0';
         for (let i = 0; i < s.Length; i++)
         {
             let cur = s[i];
@@ -1088,16 +1322,23 @@ ParDecoder.ParFormat = class ParFormat
             }
             else
             {
-                if (cur == '{')
+				if(quotchar == '0' && (cur == '\'' || cur == '"'))
+				{
+					quotchar = cur;
+				}
+				else if (quotchar != '0' && cur == quotchar) quotchar = '0';
+                if (cur == '{' && quotchar == '0')
                 {
-                    if (this.SurpressError)
-                    {
-                        continue;
-                    }
-                    throw new Error("Syntax Error: Unexpected {");
+                     openedPar++;
                 }
                 if (cur == '}')
                 {
+					if(openedPar > 0)
+					{
+						openedPar--;
+						text.Append(cur);
+						continue;
+					}
                     if (text.Length > 0)
                     {
 						let formatItem = new ParDecoder.ParFormatItem();
@@ -1208,6 +1449,10 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         let unlemused = false;
         let stopdoubledot = false;
 		let minuscount = 0;
+		let assigment = "";
+		let lastPropObject = null;
+		let waitAssigmentObject = null;
+		let totalOp = 0;
         if (this.IsObject())
         {
             cr.Result.AddObject(new Object());
@@ -1247,8 +1492,10 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 
                 }
                 let varnew = null;
+				let checkglobal = true;
                 if (lastvalue != null)
                 {
+					checkglobal = false;
                     varnew = lastvalue;
                 }
                 else
@@ -1260,13 +1507,14 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 
                     if (paritem.ParName == "(")
                     {
-						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowMethodCall)
+						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowMethodCall)
 						{
-							if (paritem.BaseDecoder != null && paritem.BaseDecoder.SurpressError)
+							let iscalled = new Object();
+							if (paritem.BaseDecoder != null && paritem.BaseDecoder.Attributes.SurpressError)
 							{
 								try
 								{
-									currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
+									currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, iscalled, localvars, this.BaseDecoder, checkglobal);
 								}
 								catch
 								{
@@ -1276,7 +1524,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 							}
 							else
 							{
-								currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, localvars);
+								currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, iscalled, localvars, this.BaseDecoder, checkglobal);
 							}
 						}
 						else
@@ -1287,21 +1535,26 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     else if (paritem.ParName == "[")
                     {
-						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowArrayAccess)
+						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowArrayAccess)
 						{
-							let prop = Common.ComputeActions.GetProp(prevvalue, varnew);
+							lastPropObject = Common.ComputeActions.GetProp(prevvalue, varnew); ;
+							let prop = lastPropObject.Value;
 							if (prop != null)
 							{
 								if (is_array(prop))
 								{
 									let indis = parseInt(subresult.Result.GetItem(0));
 									currentitemvalue = prop[indis];
+									lastPropObject.Indis = indis;
+									lastPropObject.PropertyInfo = prop;
+									
 								}
 								else if(is_string(prop))
 								{
 
 									let indis = parseInt(subresult.Result.GetItem(0));
 									currentitemvalue = prop[indis];
+									lastPropObject = null;
 								}
 								else
 								{
@@ -1382,7 +1635,8 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     else if (!this.IsObject())
                     {
-                        currentitemvalue = Common.ComputeActions.GetPropValue(current, vars, localvars);
+						lastPropObject = Common.ComputeActions.GetPropValue(current, vars, localvars);
+                        currentitemvalue = lastPropObject.Value;
                     }
                 }
 								
@@ -1395,6 +1649,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
             }
             if (current.IsOperator)
             {
+				totalOp++;
                 if (current.Value == "!")
                 {
                     unlemused = !unlemused;
@@ -1444,6 +1699,25 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     continue;
                 }
                 let opstr = current.Value;
+				if (waitAssigmentObject == null && (opstr == "=" || opstr == "+=" || opstr == "-=" || opstr == "*=" || opstr == "/=" || opstr == "^=" || opstr == "|=" 
+                        || opstr == "&=" || opstr == "<<=" || opstr == ">>=" || opstr == "%="))
+				{
+					if (totalOp <= 1 && (this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowAssigment) != 0)
+					{
+						waitAssigmentObject = lastPropObject;
+						assigment = opstr;
+
+						xoperator = null;
+						previtem = null;
+
+					}
+					else
+					{
+						xoperator = null;
+						previtem = null;
+					}
+					continue;
+				}
                 if (opstr == "||" || /*opstr == "|" || */ opstr == "or" || opstr == "&&" || /*opstr == "&" ||*/ opstr == "and" || opstr == "?")
                 {
                     if (waitop2 != "")
@@ -1572,11 +1846,13 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 
                     if (next != null && next.IsParItem())
                     {
+						totalOp--;
                         if (xoperator.Value == ".")
                         {
                             if (currentitemvalue != null && !String.IsNullOrEmpty(currentitemvalue))
                             {
-                                lastvalue = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+								lastPropObject = ComputeActions.GetProp(currentitemvalue, lastvalue);
+                                lastvalue = lastPropObject.Value;
                             }
                         }
                         else
@@ -1601,9 +1877,10 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     if (xoperator.Value == ".")
                     {
-						if(this.BaseDecoder.Flags & ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess)
+						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess)
 						{
-							lastvalue = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+							lastPropObject = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+							lastvalue = lastPropObject.Value;
 						}
 						else
 						{
@@ -1661,10 +1938,44 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
             waitvalue = null;
             waitop = "";
         }
-
+		if (waitAssigmentObject != null)
+		{
+			let assignResult = null;
+			if (waitAssigmentObject.PropType != Common.PropType.Empty && waitAssigmentObject.PropertyInfo != null)
+			{
+				try
+				{
+					assignResult = Common.ComputeActions.AssignObjectValue(waitAssigmentObject, assigment, lastvalue);
+				}
+				catch
+				{
+					
+				}
+			}
+			switch (this.BaseDecoder.Attributes.AssignReturnType)
+			{
+				case ParDecoder.ParItemAssignReturnType.PIART_RETURN_NULL:
+					lastvalue = null;
+					break;
+				case ParDecoder.ParItemAssignReturnType.PIART_RETRUN_BOOL:
+					lastvalue = assignResult && assignResult.Success;
+					break;
+				case ParDecoder.ParItemAssignReturnType.PIART_RETURN_ASSIGNVALUE_OR_NULL:
+					if (!assignResult || !assignResult.Success) lastvalue = null;
+					else lastvalue = assignResult.AssignedValue;
+					break;
+				case ParDecoder.ParItemAssignReturnType.PIART_RETURN_ASSIGN_VALUE:
+					if (assignResult && assignResult.Success) lastvalue = assignResult.AssignedValue;
+					break;
+			}
+		}
         if (this.IsObject())
         {
-            cr.Result.First()[waitkey] = lastvalue;
+			if(!empty(waitkey))
+			{
+				cr.Result.First()[waitkey] = lastvalue;
+			}
+
         }
         else
         {
@@ -1675,12 +1986,23 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 }
 //End ParDecoder/PDClass/ParItem.js
 
+//Start ParDecoder/PDClass/ParItemAssignReturnType.js
+ParDecoder.ParItemAssignReturnType =  {
+	PIART_RETURN_NULL: 0,
+	PIART_RETRUN_BOOL: 1,
+	PIART_RETURN_ASSIGN_VALUE: 2,
+	PIART_RETURN_ASSIGNVALUE_OR_NULL: 4
+}
+
+//End ParDecoder/PDClass/ParItemAssignReturnType.js
+
 //Start ParDecoder/PDClass/PardecodeFlags.js
 ParDecoder.PardecodeFlags =  {
 	PDF_Default: 0,
 	PDF_AllowMethodCall: 1,
 	PDF_AllowSubMemberAccess: 2,
-	PDF_AllowArrayAccess: 3
+	PDF_AllowArrayAccess: 4,
+	PDF_AllowAssigment: 8
 }
 
 //End ParDecoder/PDClass/PardecodeFlags.js
@@ -1722,31 +2044,35 @@ TextEngine.Evulator.BaseEvulator = class BaseEvulator
 		this.localVars = null;
 		this.Evulator = null;
 	}
+    CreatePardecode(text, decode = true)
+	{
+		let pd = new ParDecoder.ParDecode(text);
+		var self = this;
+		pd.OnGetAttributes = () => self.Evulator.ParAttributes;
+		if (decode) pd.Decode();
+		return pd;
+	}
     Render(tag, vars) {}
     RenderFinish(tag, vars, latestResult) { }
     EvulatePar(pardecoder, additionalparams = null)
     {
-        if (pardecoder.SurpressError != this.Evulator.SurpressError)
-        {
-            pardecoder.SurpressError = this.Evulator.SurpressError;
-        }
-		let addpar = undefined;
-		if(additionalparams instanceof Common.KeyValues)
+		let er = null;
+		if(additionalparams == null)
 		{
-			addpar = additionalparams;
-			this.Evulator.LocalVariables.Add(addpar);
+			er = pardecoder.Items.Compute(this.Evulator.GlobalParameters, null, this.Evulator.LocalVariables);
 		}
-        let er = pardecoder.Items.Compute(this.Evulator.GlobalParameters, null, this.Evulator.LocalVariables);
-        if (addpar != undefined)
-        {
-            this.Evulator.LocalVariables.Remove(addpar);
-        }
+		else
+		{
+			let multi = new Common.MultiObject();
+			multi.Add(additionalparams);
+			multi.Add(this.Evulator.GlobalParameters);
+			er = pardecoder.Items.Compute(multi, null, this.Evulator.LocalVariables);
+		}
         return er.Result.First();
     }
     EvulateText(text, additionalparams = null)
     {
-        let pardecoder = new ParDecoder.ParDecode(text);
-        pardecoder.Decode();
+        let pardecoder = this.CreatePardecode(text);
         return this.EvulatePar(pardecoder, additionalparams);
     }
     SetEvulator(evulator)
@@ -1758,42 +2084,39 @@ TextEngine.Evulator.BaseEvulator = class BaseEvulator
         if (attribute == null || String.IsNullOrEmpty(attribute.Value)) return null;
         if (attribute.ParData == null)
         {
-            attribute.ParData = new ParDecoder.ParDecode(attribute.Value);
-            attribute.ParData.Decode();
+            attribute.ParData = this.CreatePardecode(attribute.Value);
         }
         return this.EvulatePar(attribute.ParData, additionalparams);
 
     }
-    ConditionSuccess(tag, attr = "c")
+    ConditionSuccess(tag, attr = "*", vars = null)
     {
         let pardecoder = null;
-        if (tag.NoAttrib)
+        if ((attr === null || attr === "" ||attr == "*") && tag.NoAttrib)
         {
             if (tag.Value == null) return true;
 
             pardecoder = tag.ParData;
             if (pardecoder == null)
             {
-                pardecoder = new ParDecoder.ParDecode(tag.Value);
-                pardecoder.Decode();
+                pardecoder = this.CreatePardecode(tag.Value);
                 tag.ParData = pardecoder;
             }
         }
         else
         {
+			if(attr == "*") attr = "c";
             let cAttr = tag.ElemAttr[attr];
             if (cAttr == null || cAttr.Value == null) return true;
             pardecoder = cAttr.ParData;
             if (pardecoder == null)
             {
-                pardecoder = new ParDecoder.ParDecode(tag.Value);
-                pardecoder.Text = cAttr.Value;
-                pardecoder.Decode();
+                pardecoder = this.CreatePardecode(cAttr.Value);
                 cAttr.ParData = pardecoder;
             }
 
         }
-        let res = this.EvulatePar(pardecoder);
+        let res = this.EvulatePar(pardecoder, vars);
 		if(res === true || res === false) return res;
         return !empty(res);
     }
@@ -1856,7 +2179,7 @@ TextEngine.Evulator.CallMacroEvulator = class CallMacroEvulator extends TextEngi
 
 		if(tag.ElemAttr.FirstAttribute == null || String.IsNullOrEmpty(tag.ElemAttr.FirstAttribute.Name)) return null;
         let name = tag.ElemAttr.FirstAttribute.Name;
-        let cr = this.ConditionSuccess(tag, "if");
+        let cr = this.ConditionSuccess(tag, "if", vars);
         if (!cr) return null;
         if (String.IsNullOrEmpty(name)) return null;
         let element = this.GetMacroElement(name);
@@ -1895,7 +2218,7 @@ TextEngine.Evulator.ContinueEvulator = class ContinueEvulator extends TextEngine
 	}
     Render(tag, vars)
     {
-		let cr = this.ConditionSuccess(tag, "if");
+		let cr = this.ConditionSuccess(tag, "if", $vars);
 		if (!cr) return null;
 		let result = new TextEngine.TextEvulateResult();
 		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_CONTINUE;
@@ -1934,7 +2257,7 @@ TextEngine.Evulator.DoEvulator = class DoEvulator extends TextEngine.Evulator.Ba
 			{
 				break;
 			}
-		} while (this.ConditionSuccess(tag));
+		} while (this.ConditionSuccess(tag, "*", vars));
 		this.DestroyLocals();
 		return result;
     }
@@ -1983,10 +2306,9 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
         {
             if (startAttr.ParData == null)
             {
-                startAttr.ParData = new ParDecoder.ParDecode(start);
-                startAttr.ParData.Decode();
+                startAttr.ParData = this.CreateParDecode(start);
             }
-            startres = this.EvulatePar(startAttr.ParData);
+            startres = this.EvulatePar(startAttr.ParData, vars);
         }
         else
         {
@@ -1997,10 +2319,9 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
         {
             if (stepAttr.ParData == null)
             {
-                stepAttr.ParData = new ParDecoder.ParDecode(step);
-                stepAttr.ParData.Decode();
+                stepAttr.ParData = this.CreateParDecode(step);
             }
-            stepres = this.EvulatePar(stepAttr.ParData);
+            stepres = this.EvulatePar(stepAttr.ParData, vars);
         }
         else
         {
@@ -2023,7 +2344,7 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
             startnum = parseInt(startres);
         }
 
-        let tores = this.EvulateAttribute(toAttr);
+        let tores = this.EvulateAttribute(toAttr, vars);
         if (isNaN(tores))
         {
             return null;
@@ -2066,7 +2387,7 @@ TextEngine.Evulator.ForeachEvulator = class ForeachEvulator extends TextEngine.E
 	Render(tag, vars)
 	{
 		let varname = tag.GetAttribute("var");
-		let list = this.EvulateAttribute(tag.ElemAttr.Get("in"));
+		let list = this.EvulateAttribute(tag.ElemAttr.Get("in"), vars);
 		let skipFunction = tag.GetAttribute("skipfunction", false);
 		let isOf = tag.ElemAttr.HasAttribute("of");
 		if(!IsIterable(list)) return null;
@@ -2171,7 +2492,7 @@ TextEngine.Evulator.IfEvulator = class IfEvulator extends TextEngine.Evulator.Ba
     Render_ParseMode(tag, vars)
     {
         let result = new TextEngine.TextEvulateResult();
-        let conditionok = this.ConditionSuccess(tag);
+        let conditionok = this.ConditionSuccess(tag, "*", vars);
         let sil = false;
         for (let i = 0; i < tag.SubElementsCount; i++)
         {
@@ -2186,7 +2507,7 @@ TextEngine.Evulator.IfEvulator = class IfEvulator extends TextEngine.Evulator.Ba
                     }
                     else if (sub.ElemName.toLowerCase() == "elif")
                     {
-                        conditionok = this.ConditionSuccess(sub);
+                        conditionok = this.ConditionSuccess(sub, "*", vars);
                     }
                 }
 
@@ -2215,7 +2536,7 @@ TextEngine.Evulator.IfEvulator = class IfEvulator extends TextEngine.Evulator.Ba
     RenderDefault(tag, vars)
     {
         let result = new TextEngine.TextEvulateResult();
-        if (this.ConditionSuccess(tag))
+        if (this.ConditionSuccess(tag, "*", vars))
         {
             let elseitem = tag.GetSubElement("elif", "else");
             if (elseitem != null)
@@ -2238,7 +2559,7 @@ TextEngine.Evulator.IfEvulator = class IfEvulator extends TextEngine.Evulator.Ba
                 else
                 {
 
-                    if (this.ConditionSuccess(elseitem))
+                    if (this.ConditionSuccess(elseitem, "*", vars))
                     {
                         result.Start = elseitem.Index + 1;
                         let nextelse = elseitem.NextElementWN("elif", "else");
@@ -2280,7 +2601,7 @@ TextEngine.Evulator.IncludeEvulator = class IncludeEvulator extends TextEngine.E
     Render_Parse(tag, vars)
     {
         let loc = this.GetLastDir() + this.EvulateAttribute(tag.ElemAttr.Get("name"), vars);
-        if (!this.ConditionSuccess(tag, "if") || !File.Exists(loc)) return null;
+        if (!this.ConditionSuccess(tag, "if", vars) || !File.Exists(loc)) return null;
         this.SetLocal("_DIR_", File.GetDirName(loc));
         let xpath = tag.GetAttribute("xpath");
         let xpathold = false;
@@ -2323,9 +2644,9 @@ TextEngine.Evulator.IncludeEvulator = class IncludeEvulator extends TextEngine.E
     }
 	Render_Default(tag, vars)
     {
-        let loc = this.GetLastDir() + this.EvulateAttribute(tag.ElemAttr.Get("name"));
+        let loc = this.GetLastDir() + this.EvulateAttribute(tag.ElemAttr.Get("name"), vars);
         let parse = tag.GetAttribute("parse", "true");
-        if (!File.Exists(loc) || !this.ConditionSuccess(tag, "if")) return null;
+        if (!File.Exists(loc) || !this.ConditionSuccess(tag, "if", vars)) return null;
         this.SetLocal("_DIR_", File.GetDirName(loc));
         let content = File.ReadAllText(loc);
         let result = new TextEngine.TextEvulateResult();
@@ -2488,8 +2809,7 @@ TextEngine.Evulator.ParamEvulator = class ParamEvulator extends TextEngine.Evula
         }
         if (tag.ParData == null)
         {
-            tag.ParData = new ParDecoder.ParDecode(tag.ElemName);
-            tag.ParData.Decode();
+            tag.ParData =  this.CreatePardecode(tag.ElemName);
         }
         result.TextContent += this.EvulatePar(tag.ParData, vars);
         return result;
@@ -2549,7 +2869,7 @@ TextEngine.Evulator.ReturnEvulator = class ReturnEvulator extends TextEngine.Evu
 	}
     Render(tag, vars)
     {
-		let cr = this.ConditionSuccess(tag, "if");
+		let cr = this.ConditionSuccess(tag, "if", vars);
 		if (!cr) return null;
 		let result = new TextEngine.TextEvulateResult();
 		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_RETURN;
@@ -2567,14 +2887,14 @@ TextEngine.Evulator.SetEvulator = class SetEvulator extends TextEngine.Evulator.
 	}
     Render(tag, vars)
     {
-        let conditionok = this.ConditionSuccess(tag, "if");
+        let conditionok = this.ConditionSuccess(tag, "if", vars);
         let result = new TextEngine.TextEvulateResult();
 		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
         if (conditionok)
         {
             let defname = tag.GetAttribute("name");
             if (String.IsNullOrEmpty(defname) || !String.IsLetterOrDigit(defname)) return result;
-            this.Evulator.DefineParameters.Set(defname, this.EvulateAttribute(tag.ElemAttr.Get("value")));
+            this.Evulator.DefineParameters.Set(defname, this.EvulateAttribute(tag.ElemAttr.Get("value"), vars));
         }
         return result;
     }
@@ -2591,7 +2911,7 @@ TextEngine.Evulator.SwitchEvulator = class SwitchEvulator extends TextEngine.Evu
     Render(tag, vars)
     {
         let result = new TextEngine.TextEvulateResult();
-        let value = this.EvulateAttribute(tag.ElemAttr.Get("c"));
+        let value = this.EvulateAttribute(tag.ElemAttr.Get("c"), vars);
         let mdefault = null;
         let active = null;
         for (let i = 0; i < tag.SubElementsCount; i++)
@@ -2632,6 +2952,32 @@ TextEngine.Evulator.SwitchEvulator = class SwitchEvulator extends TextEngine.Evu
 }
 //End TextEngine/Evulator/SwitchEvulator.js
 
+//Start TextEngine/Evulator/TextTagCommandEvulator.js
+TextEngine.Evulator.TextTagCommandEvulator = class TextTagCommandEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
+		let str = tag.Value;
+		if (String.IsNullOrEmpty(str)) return res;
+		let lines = Common.StringUtils.SplitLineWithQuote(str);
+		for (let i = 0; i < lines.length; i++)
+		{
+			let line = lines[i];
+			line.trim();
+			if (String.IsNullOrEmpty(line)) continue;
+			this.EvulateText(line, vars);
+		}
+        return result;
+    }
+}
+//End TextEngine/Evulator/TextTagCommandEvulator.js
+
 //Start TextEngine/Evulator/TexttagEvulator.js
 TextEngine.Evulator.TexttagEvulator = class TexttagEvulator extends TextEngine.Evulator.BaseEvulator
 {
@@ -2658,7 +3004,7 @@ TextEngine.Evulator.UnsetEvulator = class UnsetEvulator extends TextEngine.Evula
 	}
     Render(tag, vars)
     {
-        let conditionok = this.ConditionSuccess(tag, "if");
+        let conditionok = this.ConditionSuccess(tag, "if", vars);
         let result = new TextEngine.TextEvulateResult();
 		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
         if (conditionok)
@@ -2686,7 +3032,7 @@ TextEngine.Evulator.WhileEvulator = class WhileEvulator extends TextEngine.Evula
 		let loop_count = 0;
 		let result = new TextEngine.TextEvulateResult();
 		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
-		while (this.ConditionSuccess(tag))
+		while (this.ConditionSuccess(tag, "*", vars))
 		{
 			this.SetLocal("loop_count", loop_count++);
 			let cresult = tag.EvulateValue(0, 0, vars);
@@ -2770,6 +3116,16 @@ TextEngine.Utils.HtmlUtil = class HtmlUtil
 	}
 }
 //End TextEngine/Misc/HtmlUtil.js
+
+//Start TextEngine/Misc/IntertwinedBracketsStateType.js
+TextEngine.IntertwinedBracketsStateType =  {
+	IBST_NOT_ALLOWED: 0,
+	IBST_ALLOW_ALWAYS:  1,
+	IBST_ALLOW_NOATTRIBUTED_ONLY:  2,
+	IBST_ALLOW_NOATTRIBUTED_AND_PARAM: 3,
+	IBST_ALLOW_PARAM_ONLY:   4
+}
+//End TextEngine/Misc/IntertwinedBracketsStateType.js
 
 //Start TextEngine/Misc/SavedMacros.js
 TextEngine.SavedMacros = class SavedMacros
@@ -2963,6 +3319,14 @@ TextEngine.TextElement = class TextElement
 	{
 		if (this.TagInfo == null) return TextEngine.TextElementFlags.TEF_NONE;
 		return this.TagInfo.Flags;
+	}
+	get AllowIntertwinedPar()
+	{
+		let state = this.BaseEvulator.IntertwinedBracketsState;
+		let allowed = state == TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_ALWAYS;
+		allowed = allowed || (this.NoAttrib && (state == TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_NOATTRIBUTED_AND_PARAM || state == TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_NOATTRIBUTED_ONLY));
+		allowed = allowed || (this.ElementType == TextElementType.Parameter && (state == TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_PARAM_ONLY || state == TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_NOATTRIBUTED_AND_PARAM));
+		return allowed;
 	}
 	AddElement(_element)
 	{
@@ -3700,6 +4064,17 @@ TextEngine.TextElement = class TextElement
             this.ElementType = TextEngine.TextElementType.TextNode;
             if(closetag) this.CloseState = TextEngine.TextElementClosedType.TECT_CLOSED;
         }
+		GetParentByName(name)
+        {
+            let parent = this.Parent;
+            while (parent != null)
+            {
+                if (parent.NameEquals(name)) return parent;
+                parent = parent.Parent;
+            }
+            return null;
+
+        }
 }
 
 //End TextEngine/Text/TextElement.js
@@ -4060,7 +4435,7 @@ TextEngine.TextEvulator = class TextEvulator
         this.Elements = new TextEngine.TextElement();
 		this.Elements.ElemName = "#document";
 		this.Elements.ElementType = TextEngine.TextElementType.Document;
-		this.SurpressError = false;
+		this.m_surpressError = false;
 		this.ThrowExceptionIFPrevIsNull = true;
 		this.Depth = 0;
 		this.LeftTag = '{';
@@ -4091,6 +4466,8 @@ TextEngine.TextEvulator = class TextEvulator
 		//Function
 		this.EvulatorHandler = null;
 		this.IsParseMode = false;
+		this.ParAttributes = new ParDecoder.ParDecodeAttributes();
+		this.IntertwinedBracketsState = TextEngine.IntertwinedBracketsStateType.IBST_ALLOW_NOATTRIBUTED_AND_PARAM;
 		if (isfile)
         {
             this.Text = File.ReadAllText(text);
@@ -4106,6 +4483,15 @@ TextEngine.TextEvulator = class TextEvulator
         }
 		this.NeedParse = true;
 		this.SpecialCharOption = TextEngine.SpecialCharType.SCT_AllowedAll;
+	}
+	get SurpressError()
+	{
+		return this.m_surpressError;
+	}
+	set SurpressError(value)
+	{
+		this.m_surpressError = value;
+		this.ParAttributes.SurpressError = value;
 	}
 	get Text()
 	{
@@ -4253,6 +4639,13 @@ TextEngine.TextEvulator = class TextEvulator
 		if (autoparse && this.NeedParse) this.Parse();
 		return this.Elements.EvulateValue(0, 0, vars);
 	}
+	ApplyCommandLineByLine()
+	{
+		this.EvulatorTypes.Text = () => new TextEngine.Evulator.TextTagCommandEvulator();
+		this.EvulatorTypes.Param = null;
+		this.ParAttributes.Flags |= ParDecoder.PardecodeFlags.PDF_AllowAssigment;
+	}
+	
 }
 //End TextEngine/Text/TextEvulator.js
 
@@ -4639,6 +5032,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
         let quotchar = '\0';
         let initial = false;
         let istagattrib = false;
+		let totalPar = 0;
         for (let i = this.pos; i < this.TextLength; i++)
         {
             let cur = this.Text[i];
@@ -4736,9 +5130,23 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             if ((tagElement.ElementType == TextEngine.TextElementType.Parameter && this.Evulator.ParamNoAttrib)
                  || (namefound && tagElement.NoAttrib) || (istagattrib && tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly)))
             {
-                if ((cur != this.Evulator.RightTag && tagElement.ElementType == TextEngine.TextElementType.Parameter) || cur != this.Evulator.RightTag && (cur != '/' && next != this.Evulator.RightTag || tagElement.HasFlag(TextEngine.TextElementFlags.TEF_DisableLastSlash) ))
+				if (inquot && quotchar == cur)
+				{
+					current.Append(cur);
+					inquot = false;
+				}
+				else if (!inquot && (cur == '\'' || cur == '"'))
+				{
+					inquot = true;
+					quotchar = cur;
+				}
+				if(!inquot && cur == this.Evulator.LeftTag && tagElement.AllowIntertwinedPar)
+				{
+					totalPar++;
+				}
+                if (inquot || totalPar > 0 ||  ((cur != this.Evulator.RightTag && tagElement.ElementType == TextEngine.TextElementType.Parameter) || cur != this.Evulator.RightTag && (cur != '/' && next != this.Evulator.RightTag || tagElement.HasFlag(TextEngine.TextElementFlags.TEF_DisableLastSlash) )))
                 {
-					
+					if (!inquot && cur == this.Evulator.RightTag && totalPar > 0) totalPar--;
                     current.Append(cur);
                     continue;
                 }
@@ -4864,14 +5272,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         i++;
                     }
                 }
-
-                if (cur == this.Evulator.LeftTag)
-                {
-                    if (this.Evulator.SurpressError) continue;
-
-                    this.Evulator.IsParseMode = false;
-                    throw new Error("Syntax Error");
-                }
                 if (cur == this.Evulator.RightTag)
                 {
                     if (!namefound)
@@ -4948,6 +5348,16 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                         }
                     }
                     continue;
+                }
+				if (cur == this.Evulator.LeftTag)
+                {
+					if (!tagElement.AllowIntertwinedPar)
+					{
+						if (this.Evulator.SurpressError) continue;
+						this.Evulator.IsParseMode = false;
+						throw new Error("Syntax Error");
+					}
+					totalPar++;
                 }
             }
             current.Append(cur);
@@ -5304,7 +5714,8 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                                 let method = this.XPathFunctions.GetMetohdByName(prevexp.Value);
                                 if (method != null)
                                 {
-                                    expvalue = Common.ComputeActions.CallMethodSingle(method, null, expvalue);
+									let iscalled = new Object();
+                                    expvalue = Common.ComputeActions.CallMethodSingle(method, null, expvalue, iscalled);
                                     if (curvalue == null)
                                     {
                                         curvalue = expvalue;
