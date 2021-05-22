@@ -812,7 +812,7 @@ Common.StringUtils = class StringUtils
 		{
 			let cur = text[i];
 
-			if (quotechar == '0' && cur == '\'' || cur == '"') quotechar = cur;
+			if (quotechar == '0' && (cur == '\'' || cur == '"')) quotechar = cur;
 			else if (quotechar != '0' && cur == quotechar) quotechar = '0';
 			let nextN = i + 1 < text.Length && text[i + 1] == '\n';
 			if (quotechar == '0' && (cur == '\n' || (cur == '\r')))
@@ -1507,6 +1507,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 
                     if (paritem.ParName == "(")
                     {
+						lastPropObject = null;
 						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowMethodCall)
 						{
 							let iscalled = new Object();
@@ -1636,7 +1637,9 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     else if (!this.IsObject())
                     {
 						lastPropObject = Common.ComputeActions.GetPropValue(current, vars, localvars);
-                        currentitemvalue = lastPropObject.Value;
+						if(!lastPropObject) currentitemvalue = null;
+						else currentitemvalue = lastPropObject.Value;
+                        
                     }
                 }
 								
@@ -1849,11 +1852,14 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 						totalOp--;
                         if (xoperator.Value == ".")
                         {
-                            if (currentitemvalue != null && !String.IsNullOrEmpty(currentitemvalue))
-                            {
-								lastPropObject = ComputeActions.GetProp(currentitemvalue, lastvalue);
-                                lastvalue = lastPropObject.Value;
-                            }
+							if((this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess) != 0)
+							{
+								if (currentitemvalue != null && !String.IsNullOrEmpty(currentitemvalue))
+								{
+									lastPropObject = ComputeActions.GetProp(currentitemvalue, lastvalue);
+									lastvalue = lastPropObject.Value;
+								}
+							}
                         }
                         else
                         {
