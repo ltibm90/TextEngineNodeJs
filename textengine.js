@@ -204,10 +204,10 @@ Common.ComputeActions = class ComputeActions
         if (item == null || item == undefined) return null;
 		if(item instanceof Common.MultiObject)
 		{
-			for (let i = 0; i < vars.Count; i++)
+			for (let i = 0; i < item.Count; i++)
             {
-				if(vars.Get(i) == null) continue;
-				let r = ComputeActions.CallMethodSingle(vars.Get(i), item, name, mparams, iscalled);
+				if(item.Get(i) == null) continue;
+				let r = ComputeActions.CallMethodSingle(item.Get(i), name, mparams, iscalled);
 				if(!iscalled.Success) continue;
 				return r;
             }
@@ -750,6 +750,7 @@ Common.PropObject = class PropObject
 {
 	constructor()
 	{
+		this.FullName = "";
 		this.Value = null;
 		this.PropertyInfo = null;
 		this.Indis = null;
@@ -762,7 +763,8 @@ Common.PropType = {
 	Property: 1,
 	Dictionary: 2,
 	KeyValues: 3,
-	Indis: 4
+	Indis: 4,
+	Method: 5
 }
 //End Common/Utils/PropObject.js
 
@@ -803,7 +805,7 @@ Common.StringBuilder = class StringBuilder
 //Start Common/Utils/StringUtils.js
 Common.StringUtils = class StringUtils
 {
-	static SplitLineWithQuote(text)
+	static SplitLineWithQuote(text, splitsemicolon = false)
 	{
 		let all = [];
 		let quotechar = '0';
@@ -815,10 +817,10 @@ Common.StringUtils = class StringUtils
 			if (quotechar == '0' && (cur == '\'' || cur == '"')) quotechar = cur;
 			else if (quotechar != '0' && cur == quotechar) quotechar = '0';
 			let nextN = i + 1 < text.Length && text[i + 1] == '\n';
-			if (quotechar == '0' && (cur == '\n' || (cur == '\r')))
+			if (quotechar == '0' && (cur == '\n' || (cur == '\r') || (splitsemicolon && cur == ';')))
 			{
 				all.push(text.substr(start, i - start));
-				if (nextN) i++;
+				if (nextN && cur != ';') i++;
 				start = i + 1;
 			}
 		}
@@ -1010,7 +1012,7 @@ ParDecoder.ParDecode = class ParDecode
     {
         let inspec = false;
         let inquot = false;
-        let qutochar = '\0';
+        let quotechar = '\0';
         let innerItems = new ParDecoder.InnerItemsList();
         let value = new Common.StringBuilder();
 		let valDotEntered = false;
@@ -1047,7 +1049,7 @@ ParDecoder.ParDecode = class ParDecode
                 if (cur == '\'' || cur == '\"')
                 {
                     inquot = true;
-                    qutochar = cur;
+                    quotechar = cur;
                     continue;
                 }
                 if (cur == '+' || cur == '-' || cur == '*' ||
@@ -1066,7 +1068,7 @@ ParDecoder.ParDecode = class ParDecode
 							value.Append(cur);
 							continue;
 						}
-                        innerItems.Add(this.Inner(value.ToString(), qutochar));
+                        innerItems.Add(this.Inner(value.ToString(), quotechar));
 						valDotEntered = false;
                         value.Clear();
                     }
@@ -1120,7 +1122,7 @@ ParDecoder.ParDecode = class ParDecode
                         }
                         let valuestr = inner2.Value;
                         innerItems.Add(inner2);
-                        qutochar = '\0';
+                        quotechar = '\0';
                         if (valuestr == "=" || valuestr == "<=" || valuestr == ">=" || valuestr == "<" || valuestr == ">" || valuestr == "!=" || valuestr == "==")
                         {
                             this.pos = i;
@@ -1138,7 +1140,7 @@ ParDecoder.ParDecode = class ParDecode
             }
             else
             {
-                if (cur == qutochar)
+                if (cur == quotechar)
                 {
                     inquot = false;
                     continue;
@@ -1153,9 +1155,9 @@ ParDecoder.ParDecode = class ParDecode
             value.Append(cur);
 
         }
-        if (value.Length > 0)
+        if (value.Length > 0 || quotechar == "'" || quotechar == "\"")
         {
-            innerItems.Add(this.Inner(value.ToString(), qutochar));
+            innerItems.Add(this.Inner(value.ToString(), quotechar));
         }
         this.pos = this.TextLength;
 
@@ -1198,6 +1200,12 @@ ParDecoder.ParDecode = class ParDecode
 //End ParDecoder/PDClass/ParDecode.js
 
 //Start ParDecoder/PDClass/ParDecodeAttributes.js
+ParDecoder.ParPropRestrictedType =  {
+	PRT_RESTRICT_GET: 1,
+	PRT_RESTRICT_SET: 2,
+	PRT_RESTRICT_ALL: 1 | 2
+}
+
 ParDecoder.ParDecodeAttributes = class ParDecodeAttributes
 {
     constructor()
@@ -1210,7 +1218,14 @@ ParDecoder.ParDecodeAttributes = class ParDecodeAttributes
 		this.AssignReturnType = ParDecoder.ParItemAssignReturnType.PIART_RETRUN_BOOL;
 		this.Flags = ParDecoder.PardecodeFlags.PDF_AllowMethodCall | ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess | ParDecoder.PardecodeFlags.PDF_AllowArrayAccess;
 		this.SurpressError = false;
-	}	
+		this.RestrictedProperties = null;
+		this.OnPropertyAccess = null;
+		this._tracing = new ParDecoder.ParTracer();
+	}
+	get Tracing()
+	{
+		return this._tracing;
+	}
 }
 //End ParDecoder/PDClass/ParDecodeAttributes.js
 
@@ -1402,6 +1417,10 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 		this.ParName = "";
 		this.BaseDecoder = null;
 	}
+	get Attributes()
+	{
+		return this.BaseDecoder.Attributes;
+	}
     IsParItem()
     {
         return true;
@@ -1453,6 +1472,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 		let lastPropObject = null;
 		let waitAssigmentObject = null;
 		let totalOp = 0;
+		let propertyStr = "";
         if (this.IsObject())
         {
             cr.Result.AddObject(new Object());
@@ -1511,7 +1531,10 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowMethodCall)
 						{
 							let iscalled = new Object();
-							if (paritem.BaseDecoder != null && paritem.BaseDecoder.Attributes.SurpressError)
+							if (propertyStr.length == 0) propertyStr = prevvalue;
+							else propertyStr += "." + prevvalue;
+							let allowget = this.AllowAccessProperty(propertyStr, Common.PropType.Method);
+							if (allowget && paritem.BaseDecoder != null && paritem.BaseDecoder.Attributes.SurpressError)
 							{
 								try
 								{
@@ -1523,10 +1546,15 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 									currentitemvalue = null;
 								}
 							}
-							else
+							else if(allowget)
 							{
 								currentitemvalue = Common.ComputeActions.CallMethod(prevvalue, subresult.Result.GetObjects(), varnew, iscalled, localvars, this.BaseDecoder, checkglobal);
 							}
+							else
+							{
+								currentitemvalue = null;
+							}
+							if(allowget) this.AddToTrace(propertyStr, Common.PropType.Method, currentitemvalue, iscalled && iscalled.Success);
 						}
 						else
 						{
@@ -1538,8 +1566,13 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     {
 						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowArrayAccess)
 						{
-							lastPropObject = Common.ComputeActions.GetProp(prevvalue, varnew); ;
-							let prop = lastPropObject.Value;
+							if (propertyStr.length == 0) propertyStr = prevvalue;
+							else propertyStr += "." + prevvalue;
+							let allowget = this.AllowAccessProperty(propertyStr, Common.PropType.Indis);
+							if(allowget) lastPropObject = Common.ComputeActions.GetProp(prevvalue, varnew);
+							else lastPropObject = null;
+							let prop = null;
+							if(lastPropObject != null) prop = lastPropObject.Value;
 							if (prop != null)
 							{
 								if (is_array(prop))
@@ -1562,6 +1595,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 									//currentitemvalue = prop;
 								}
 							}
+							if(allowget) this.AddToTrace(propertyStr, Common.PropType.Indis, currentitemvalue, lastPropObject != null && lastPropObject.PropType != Common.PropType.Empty);
 						}
 						else
 						{
@@ -1636,10 +1670,13 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     else if (!this.IsObject())
                     {
-						lastPropObject = Common.ComputeActions.GetPropValue(current, vars, localvars);
+						propertyStr = current.Value;
+						let allowget = this.AllowAccessProperty(propertyStr, Common.PropType.Property);
+						if(allowget) lastPropObject = Common.ComputeActions.GetPropValue(current, vars, localvars);
+						else lastPropObject = null;
 						if(!lastPropObject) currentitemvalue = null;
 						else currentitemvalue = lastPropObject.Value;
-                        
+						if(allowget) this.AddToTrace(propertyStr, Common.PropType.Property, currentitemvalue, lastPropObject != null && lastPropObject.PropType != Common.PropType.Empty);
                     }
                 }
 								
@@ -1663,7 +1700,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                 {
                     if (waitop2 != "")
                     {
-						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                         waitvalue2 = null;
@@ -1671,7 +1708,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     if (waitop != "")
                     {
-						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						if(minuscount % 2 == 1) lastvalue =  Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                         waitvalue = null;
@@ -1708,6 +1745,8 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 					if (totalOp <= 1 && (this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowAssigment) != 0)
 					{
 						waitAssigmentObject = lastPropObject;
+						if(waitAssigmentObject != null) waitAssigmentObject.FullName = propertyStr;
+						propertyStr = "";
 						assigment = opstr;
 
 						xoperator = null;
@@ -1725,7 +1764,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                 {
                     if (waitop2 != "")
                     {
-						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                         waitvalue2 = null;
@@ -1733,7 +1772,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     if (waitop != "")
                     {
-						if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+						if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 						minuscount = 0;
                         lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                         waitvalue = null;
@@ -1831,7 +1870,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     {
                         if (waitop2 != "")
                         {
-							if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+							if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 							minuscount = 0;
                             lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
                             waitvalue2 = null;
@@ -1839,7 +1878,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                         }
                         if (waitop != "")
                         {
-							if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+							if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 							minuscount = 0;
                             lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
                             waitvalue = null;
@@ -1856,8 +1895,18 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 							{
 								if (currentitemvalue != null && !String.IsNullOrEmpty(currentitemvalue))
 								{
-									lastPropObject = ComputeActions.GetProp(currentitemvalue, lastvalue);
-									lastvalue = lastPropObject.Value;
+									propertyStr += "." + currentitemvalue;
+									if(this.AllowAccessProperty(propertyStr, Common.PropType.Property))
+									{
+										lastPropObject = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+										lastvalue = lastPropObject.Value;
+										this.AddToTrace(propertyStr, Common.PropType.Property, lastvalue, lastPropObject != null && lastPropObject.PropType != Common.PropType.Empty);
+									}
+									else
+									{
+										lastPropObject = null;
+										lastvalue = null;
+									}
 								}
 							}
                         }
@@ -1885,8 +1934,19 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     {
 						if(this.BaseDecoder.Attributes.Flags & ParDecoder.PardecodeFlags.PDF_AllowSubMemberAccess)
 						{
-							lastPropObject = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
-							lastvalue = lastPropObject.Value;
+							
+							propertyStr += "." + currentitemvalue;
+							if(this.AllowAccessProperty(propertyStr, Common.PropType.Property))
+							{
+								lastPropObject = Common.ComputeActions.GetProp(currentitemvalue, lastvalue);
+								lastvalue = lastPropObject.Value;
+								this.AddToTrace(propertyStr, Common.PropType.Property, lastvalue, lastPropObject != null && lastPropObject.PropType != Common.PropType.Empty);
+							}
+							else
+							{
+								lastPropObject = null;
+								lastvalue = null;
+							}						
 						}
 						else
 						{
@@ -1896,7 +1956,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                     }
                     else if (nextop != "." && ((xoperator.Value != "+" && xoperator.Value != "-") || nextop == "" || (Common.ComputeActions.PriotiryStop.Contains(nextop))))
                     {
-						if(minuscount % 2 == 1) currentitemvalue = ComputeActions.OperatorResult(currentitemvalue, -1, "*");
+						if(minuscount % 2 == 1) currentitemvalue = Common.ComputeActions.OperatorResult(currentitemvalue, -1, "*");
 						minuscount = 0;
                         let opresult = Common.ComputeActions.OperatorResult(lastvalue, currentitemvalue, xoperator.Value);
                         lastvalue = opresult;
@@ -1930,7 +1990,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         }
         if (waitop2 != "")
         {
-			if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+			if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 			minuscount = 0;
             lastvalue = Common.ComputeActions.OperatorResult(waitvalue2, lastvalue, waitop2);
             waitvalue2 = null;
@@ -1938,13 +1998,13 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         }
         if (waitop != "")
         {
-			if(minuscount % 2 == 1) lastvalue = ComputeActions.OperatorResult(lastvalue, -1, "*");
+			if(minuscount % 2 == 1) lastvalue = Common.ComputeActions.OperatorResult(lastvalue, -1, "*");
 			minuscount = 0;
             lastvalue = Common.ComputeActions.OperatorResult(waitvalue, lastvalue, waitop);
             waitvalue = null;
             waitop = "";
         }
-		if (waitAssigmentObject != null)
+		if (waitAssigmentObject != null && this.AllowAccessProperty(waitAssigmentObject.FullName, waitAssigmentObject.PropType, true))
 		{
 			let assignResult = null;
 			if (waitAssigmentObject.PropType != Common.PropType.Empty && waitAssigmentObject.PropertyInfo != null)
@@ -1974,6 +2034,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 					if (assignResult && assignResult.Success) lastvalue = assignResult.AssignedValue;
 					break;
 			}
+			if (assignResult && assignResult.Success) this.AddToTrace(waitAssigmentObject.FullName, waitAssigmentObject.PropType, assignResult.AssignedValue, true, true);
 		}
         if (this.IsObject())
         {
@@ -1989,6 +2050,32 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
         }
         return cr;
     }
+	AllowAccessProperty(propStr, type, isassign = false)
+	{
+		if (this.Attributes.RestrictedProperties != null)
+		{
+			let prt = this.Attributes.RestrictedProperties[propStr];
+			if (prt !== undefined)
+			{
+				if ((isassign && (prt & ParDecoder.ParPropRestrictedType.PRT_RESTRICT_SET) != 0) || (!isassign && (prt & ParDecoder.ParPropRestrictedType.PRT_RESTRICT_GET) != 0)) return false;
+			}
+		}
+		return this.Attributes.OnPropertyAccess == null || this.Attributes.OnPropertyAccess(new ParProperty(propStr, type, isassign));
+	}
+	AddToTrace(propname, type, value, accessed = false, isassign = false)
+	{
+		if (!this.Attributes.Tracing.Enabled)
+		{
+			return;
+		}
+		let allowtrace = (!isassign && this.Attributes.Tracing.HasTraceThisType(type)) || (isassign && this.Attributes.Tracing.HasFlag(ParDecoder.ParTraceFlags.PTF_TRACE_ASSIGN));
+		if (!allowtrace) return;
+		let traceitem = new ParDecoder.ParTracerItem(propname, type);
+		traceitem.Accessed = accessed;
+		traceitem.IsAssign = isassign;
+		if (this.Attributes.Tracing.HasFlag(ParDecoder.ParTraceFlags.PTF_KEEP_VALUE)) traceitem.Value = value;
+		this.Attributes.Tracing.Add(traceitem);
+	}
 }
 //End ParDecoder/PDClass/ParItem.js
 
@@ -2001,6 +2088,109 @@ ParDecoder.ParItemAssignReturnType =  {
 }
 
 //End ParDecoder/PDClass/ParItemAssignReturnType.js
+
+//Start ParDecoder/PDClass/ParProperty.js
+ParDecoder.ParProperty = class ParProperty
+{
+    constructor(name = "", type = Common.PropType.Property, isassign = false)
+    {
+		this.Name = name;
+		this.Type = type;
+		this.IsAssign = isassign;
+    }
+}
+//End ParDecoder/PDClass/ParProperty.js
+
+//Start ParDecoder/PDClass/ParTracer.js
+ParDecoder.ParTraceFlags =  {
+	PTF_TRACE_PROPERTY: 1,
+	PTF_TRACE_METHOD: 2,
+	PTF_TRACE_INDIS: 4,
+	PTF_TRACE_ASSIGN: 8,
+	PTF_KEEP_VALUE: 16
+}
+
+ParDecoder.ParTracer = class ParTracer
+{
+    constructor()
+    {
+		this.inner = [];
+		this.Enabled = false;
+        this.Flags = ParDecoder.ParTraceFlags.PTF_KEEP_VALUE | ParDecoder.ParTraceFlags.PTF_TRACE_METHOD | ParDecoder.ParTraceFlags.PTF_TRACE_PROPERTY | ParDecoder.ParTraceFlags.PTF_TRACE_ASSIGN | ParDecoder.ParTraceFlags.PTF_TRACE_INDIS;
+    }
+	get Count()
+	{
+		return this.inner.length;
+	}
+	Clear()
+	{
+		this.inner = [];
+	}
+	Add(item)
+	{
+		this.inner.push(item);
+	}
+	Get(id)
+	{
+		return this.inner[id];
+	}
+	GetField(name)
+	{
+		for (let i = 0; i < this.inner.length; i++)
+		{
+			if (this.inner[i].Name == name)
+			{
+				return this.inner[i];
+			}
+		}
+		return null;
+	}
+	GetFields(name, limit = 0)
+	{
+		let list = [];
+		for (let i = 0; i < this.inner.length; i++)
+		{
+			if (this.inner[i].Name == name)
+			{
+				list.push(this.inner[i]);
+			}
+			if(limit > 0 && this.inner.length() >= limit) break;
+		}
+		return list;
+	}
+	HasFlag(flag)
+	{
+		return (this.Flags & flag) != 0;
+	}
+	HasTraceThisType(pt)
+	{
+		switch (pt)
+		{
+			case Common.PropType.Property:
+				return this.HasFlag(ParDecoder.ParTraceFlags.PTF_TRACE_PROPERTY);
+			case Common.PropType.Indis:
+				return this.HasFlag(ParDecoder.ParTraceFlags.PTF_TRACE_INDIS);
+			case Common.PropType.Method:
+				return this.HasFlag(ParDecoder.ParTraceFlags.PTF_TRACE_METHOD);
+		}
+		return false;
+	}
+}
+//End ParDecoder/PDClass/ParTracer.js
+
+//Start ParDecoder/PDClass/ParTracerItem.js
+ParDecoder.ParTracerItem = class ParTracerItem
+{
+    constructor(name = "", type = Common.PropType.Property, value = null)
+    {
+		this.Name = name;
+		this.Value = value;
+		this.Type = type;
+		this.Accessed = false;
+		this.IsAssign = false;
+    }
+}
+//End ParDecoder/PDClass/ParTracerItem.js
 
 //Start ParDecoder/PDClass/PardecodeFlags.js
 ParDecoder.PardecodeFlags =  {
@@ -2049,6 +2239,10 @@ TextEngine.Evulator.BaseEvulator = class BaseEvulator
 	{
 		this.localVars = null;
 		this.Evulator = null;
+	}
+	get Options()
+	{
+		return this.Evulator.EvulatorTypes.Options;
 	}
     CreatePardecode(text, decode = true)
 	{
@@ -2263,6 +2457,7 @@ TextEngine.Evulator.DoEvulator = class DoEvulator extends TextEngine.Evulator.Ba
 			{
 				break;
 			}
+			if (this.Options.Max_DoWhile_Loop != 0 && loop_count - 1 > this.Options.Max_DoWhile_Loop) break;
 		} while (this.ConditionSuccess(tag, "*", vars));
 		this.DestroyLocals();
 		return result;
@@ -2358,6 +2553,7 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
         tonum = parseInt(tores);
         let result = new TextEngine.TextEvulateResult();
         this.CreateLocals();
+		let loop_count = 0;
         for (let i = startnum; i < tonum; i += stepnum)
         {
 
@@ -2375,6 +2571,7 @@ TextEngine.Evulator.ForEvulator = class ForEvulator extends TextEngine.Evulator.
             {
                 break;
             }
+			if (this.Options.Max_For_Loop != 0 && loop_count++ > this.Options.Max_For_Loop) break;
         }
         this.DestroyLocals();
         result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
@@ -2428,6 +2625,7 @@ TextEngine.Evulator.ForeachEvulator = class ForeachEvulator extends TextEngine.E
 				return RES_BREAK;
 			}
 			if(targCount >= 0 && total >= targCount) return RES_BREAK;
+			if (this.Options.Max_ForEach_Loop != 0 && total - 1 > this.Options.Max_ForEach_Loop) return RES_BREAK;
 			return RES_NONE;
 		}
 		if(isOf)
@@ -2858,6 +3056,7 @@ TextEngine.Evulator.RepeatEvulator = class RepeatEvulator extends TextEngine.Evu
             {
                 break;
             }
+			if (this.Options.Max_Repeat_Loop != 0 && i > this.Options.Max_Repeat_Loop) break;
         }
         this.DestroyLocals();
         result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
@@ -2958,6 +3157,34 @@ TextEngine.Evulator.SwitchEvulator = class SwitchEvulator extends TextEngine.Evu
 }
 //End TextEngine/Evulator/SwitchEvulator.js
 
+//Start TextEngine/Evulator/TextParamEvulator.js
+TextEngine.Evulator.TextParamEvulator = class TextParamEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
+		for (let i = 0; i < tag.SubElementsCount; i++)
+        {
+            let elem = tag.SubElements.GetItem(i);
+			if(elem.ElementType == TextEngine.TextElementType.TextNode)
+			{
+				result.TextContent += elem.Value;
+			}
+			else if(elem.ElementType == TextEngine.TextElementType.Parameter)
+			{
+				result.TextContent += elem.EvulateValue().TextContent;
+			}
+        }
+        return result;
+    }
+}
+//End TextEngine/Evulator/TextParamEvulator.js
+
 //Start TextEngine/Evulator/TextTagCommandEvulator.js
 TextEngine.Evulator.TextTagCommandEvulator = class TextTagCommandEvulator extends TextEngine.Evulator.BaseEvulator
 {
@@ -2975,9 +3202,9 @@ TextEngine.Evulator.TextTagCommandEvulator = class TextTagCommandEvulator extend
 		for (let i = 0; i < lines.length; i++)
 		{
 			let line = lines[i];
-			line = replace(/\s/g, "");
+			line = line.replace(/\s/g, "");
 			if (String.IsNullOrEmpty(line)) continue;
-			this.EvulateText(line, vars);
+			this.EvulateText(line, vars, true);
 		}
         return result;
     }
@@ -3061,6 +3288,30 @@ TextEngine.Evulator.WhileEvulator = class WhileEvulator extends TextEngine.Evula
 }
 //End TextEngine/Evulator/WhileEvulator.js
 
+//Start TextEngine/Misc/EvulatorOptions.js
+TextEngine.EvulatorOptions = class EvulatorOptions
+{
+	constructor()
+	{
+		this.p_otherOptions = new Object();
+		this.Max_For_Loop = 0;
+		this.Max_DoWhile_Loop = 0;
+		this.Max_Repeat_Loop = 0;
+		this.Max_ForEach_Loop = 0;
+	}
+	GetOption(name, defaultV = null)
+	{
+		val = this.p_otherOptions[name];
+		if (val !== undefined) return val;
+		return defaultV;
+	}
+	SetOptions(name, value)
+	{
+		this.p_otherOptions[name] = value;
+	}
+}
+//End TextEngine/Misc/EvulatorOptions.js
+
 //Start TextEngine/Misc/EvulatorTypes.js
 TextEngine.Evulator.EvulatorTypes = class EvulatorTypes
 {
@@ -3070,6 +3321,11 @@ TextEngine.Evulator.EvulatorTypes = class EvulatorTypes
 		this.Text = null;
 		this.Param = null;
 		this.GeneralType = null;
+		this.p_options = new TextEngine.EvulatorOptions();
+	}
+	get Options()
+	{
+		return this.p_options;
 	}
     SetType(name, type)
     {
@@ -3182,7 +3438,8 @@ TextEngine.SpecialCharType =  {
         /// <summary>
         /// e.g(\test\{} result: \test{ 
         /// </summary>
-        SCT_AllowedClosedTagOnly: 3
+        SCT_AllowedClosedTagOnly: 4,
+        SCT_AllowedNoParseWithParamTagOnly: 8
 }
 //End TextEngine/Misc/SpecialCharType.js
 
@@ -3672,7 +3929,10 @@ TextEngine.TextElement = class TextElement
                     if(handler != null) handler.OnRenderPost(this, vars, rResult);
                     return rResult;
                 }
-                result.TextContent = this.Value;
+				if(!this.BaseEvulator.ReturnEmptyIfTextEvulatorIsNull)
+                {
+                    result.TextContent = this.Value;
+                }
                 return result;
             }
             if (this.ElementType == TextEngine.TextElementType.Parameter)
@@ -4249,7 +4509,8 @@ TextEngine.TextElementFlags =  {
 	/// </summary>
 	TEF_NoParse:  1 << 5,
 	TEF_AutoCloseIfSameTagFound: 1 << 6,
-	TEF_PreventAutoCreation: 1 << 7
+	TEF_PreventAutoCreation: 1 << 7,
+	TEF_NoParse_AllowParam: 1 << 8
 }
 
 //End TextEngine/Text/TextElementFlags.js
@@ -4489,6 +4750,7 @@ TextEngine.TextEvulator = class TextEvulator
         }
 		this.NeedParse = true;
 		this.SpecialCharOption = TextEngine.SpecialCharType.SCT_AllowedAll;
+		this.ReturnEmptyIfTextEvulatorIsNull = false;
 	}
 	get SurpressError()
 	{
@@ -4576,6 +4838,7 @@ TextEngine.TextEvulator = class TextEvulator
         this.TagInfos.Get("noparse").Flags = TextEngine.TextElementFlags.TEF_NoParse;
 		this.TagInfos.Get("while").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
 		this.TagInfos.Get("do").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
+		this.TagInfos.Get("text").Flags = TextEngine.TextElementFlags.TEF_NoParse_AllowParam;
     }
     InitEvulator()
     {
@@ -4598,6 +4861,7 @@ TextEngine.TextEvulator = class TextEvulator
         this.EvulatorTypes.SetType("include",() => new  TextEngine.Evulator.IncludeEvulator());
 		this.EvulatorTypes.SetType("while",() => new  TextEngine.Evulator.WhileEvulator());
 		this.EvulatorTypes.SetType("do",() => new  TextEngine.Evulator.DoEvulator());
+		this.EvulatorTypes.SetType("text",() => new  TextEngine.Evulator.TextParamEvulator());
     }
     InitAmpMaps()
     {
@@ -4662,8 +4926,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 	{
 		this.Text = "";
 		this.pos = 0;
-		this.in_noparse = false;
-		this.noparse_tag = "";
+		this.directclose = false;
 		this._evulator = baseevulator;
 	}
 
@@ -4807,8 +5070,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             i = this.pos;
         }
         this.pos = 0;
-        this.in_noparse = false;
-        this.noparse_tag = "";
         this.Evulator.IsParseMode = false;
     }
     GetNotClosedPrevTagsUntil(tag, name)
@@ -4905,105 +5166,111 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 		tagElement.BaseEvulator = this.Evulator;
         let istextnode = false;
         let intag = false;
+		let in_noparse = parent != null && (parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse) || parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse_AllowParam));
         for (let i = start; i < this.TextLength; i++)
         {
-            if (this.Evulator.NoParseEnabled && this.in_noparse)
+			let cur = this.Text[i];
+            let next = '\0';
+            if (i + 1 < this.TextLength)
             {
-                istextnode = true;
-                tagElement.SetTextTag(true);
+                next = this.Text[i + 1];
             }
-            else
-            {
-                let cur = this.Text[i];
-                if (!inspec)
-                {
-                    if (cur == this.Evulator.LeftTag)
-                    {
-                        if (intag)
-                        {
-                            if (this.Evulator.SurpressError)
-                            {
-                                tagElement.SetTextTag(true);
-                                tagElement.Value = this.Text.Substring(start, i - start);
-                                this.pos = i - 1;
-                                return tagElement;
-                            }
-                            else
-                            {
-                                this.Evulator.IsParseMode = false;
-                                throw new Error("Syntax Error");
-                            }
-                        }
-                        intag = true;
-                        continue;
-                    }
-                    else if (this.Evulator.DecodeAmpCode && cur == '&')
-                    {
-                        let ampcode = this.DecodeAmp(i + 1, false);
-                        i = this.pos;
-                        tagElement.SetTextTag(true);
-                        tagElement.ElementType = TextEngine.TextElementType.EntityReferenceNode;
-                        if (ampcode.StartsWith("&") && this.Evulator.SurpressError)
-                        {
-                            if (this.Evulator.SurpressError)
-                            {
-                                tagElement.ElementType = TextEngine.TextElementType.TextNode;
-                            }
-                            else
-                            {
-                                this.Evulator.IsParseMode = false;
-                                throw new Error("Syntax Error");
-                            }
-                        }
-                        tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
-                        tagElement.Value = ampcode;
-                        return tagElement;
-                    }
-                    else
-                    {
-                        if (!intag)
-                        {
-                            istextnode = true;
-                            tagElement.SetTextTag(true);
-                        }
-                    }
-                }
-                if (!inspec && cur == this.Evulator.RightTag)
-                {
-                    if (!intag)
-                    {
-                        if (this.Evulator.SurpressError)
-                        {
-                            tagElement.SetTextTag(true);
-                            tagElement.Value = this.Text.Substring(start, i - start);
-                            this.pos = i - 1;
-                            return tagElement;
+			if(in_noparse && cur == this.Evulator.LeftTag && (next != this.Evulator.ParamChar || !parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse_AllowParam)))
+			{
+				istextnode = true;
+				tagElement.SetTextTag(true);
+			}
+			else
+			{
+				if (!inspec)
+				{
+					if (cur == this.Evulator.LeftTag)
+					{
+						if (intag)
+						{
+							if (this.Evulator.SurpressError)
+							{
+								tagElement.SetTextTag(true);
+								tagElement.Value = this.Text.Substring(start, i - start);
+								this.pos = i - 1;
+								return tagElement;
+							}
+							else
+							{
+								this.Evulator.IsParseMode = false;
+								throw new Error("Syntax Error");
+							}
+						}
+						intag = true;
+						continue;
+					}
+					else if (this.Evulator.DecodeAmpCode && cur == '&')
+					{
+						let ampcode = this.DecodeAmp(i + 1, false);
+						i = this.pos;
+						tagElement.SetTextTag(true);
+						tagElement.ElementType = TextEngine.TextElementType.EntityReferenceNode;
+						if (ampcode.StartsWith("&") && this.Evulator.SurpressError)
+						{
+							if (this.Evulator.SurpressError)
+							{
+								tagElement.ElementType = TextEngine.TextElementType.TextNode;
+							}
+							else
+							{
+								this.Evulator.IsParseMode = false;
+								throw new Error("Syntax Error");
+							}
+						}
+						tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
+						tagElement.Value = ampcode;
+						return tagElement;
+					}
+					else
+					{
+						if (!intag)
+						{
+							istextnode = true;
+							tagElement.SetTextTag(true);
+						}
+					}
+				}
+				if (!inspec && cur == this.Evulator.RightTag)
+				{
+					if (!intag)
+					{
+						if (this.Evulator.SurpressError)
+						{
+							tagElement.SetTextTag(true);
+							tagElement.Value = this.Text.Substring(start, i - start);
+							this.pos = i - 1;
+							return tagElement;
 
-                        }
-                        this.Evulator.IsParseMode = false;
-                        throw new Error("Syntax Error");
-                    }
-                    intag = false;
-                }
-            }
+						}
+						this.Evulator.IsParseMode = false;
+						throw new Error("Syntax Error");
+					}
+					intag = false;
+				}
+			}
+            
+			
             this.pos = i;
             if (!intag || istextnode)
             {
-                tagElement.Value = this.ParseInner();
-                if (!this.in_noparse && tagElement.ElementType == TextEngine.TextElementType.TextNode && String.IsNullOrEmpty(tagElement.Value))
+                tagElement.Value = this.ParseInner(parent);
+                if (!in_noparse && tagElement.ElementType == TextEngine.TextElementType.TextNode && String.IsNullOrEmpty(tagElement.Value))
                 {
                     return null;
                 }
                 intag = false;
-                if (this.in_noparse)
+                if (this.directclose && in_noparse)
                 {
                     parent.AddElement(tagElement);
 					let elem = new TextEngine.TextElement();
 					elem.Parent = parent;
-					elem.ElemName = this.noparse_tag;
+					elem.ElemName = parent.ElemName;
 					elem.SlashUsed = true;
-                    this.noparse_tag = "";
-                    this.in_noparse = false;
                     return elem;
                 }
                 return tagElement;
@@ -5013,11 +5280,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                 this.ParseTagHeader(tagElement);
                 intag = false;
                 if (String.IsNullOrEmpty(tagElement.ElemName)) return null;
-                if (this.Evulator.NoParseEnabled && (tagElement.GetTagFlags() & TextEngine.TextElementFlags.TEF_NoParse) > 0)
-                {
-                    this.in_noparse = true;
-                    this.noparse_tag = tagElement.ElemName;
-                }
                 return tagElement;
 
             }
@@ -5370,14 +5632,15 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
         }
         this.pos = this.TextLength;
     }
-    ParseInner()
+    ParseInner(parent)
     {
         let text = new Common.StringBuilder();
         let inspec = false;
         let nparsetext = new Common.StringBuilder();
         let parfound = false;
         let waitspces = new Common.StringBuilder();
-
+		let in_noparse = parent != null && (parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse) || parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse_AllowParam));
+		this.directclose = false;
         for (let i = this.pos; i < this.TextLength; i++)
         {
             let cur = this.Text[i];
@@ -5390,7 +5653,8 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
             if (cur == '\\')
             {
-				if (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedAll ||  (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedClosedTagOnly && next == this.Evulator.RightTag))
+				if (this.Evulator.SpecialCharOption == TextEngine.SpecialCharType.SCT_AllowedAll || ((this.Evulator.SpecialCharOption & TextEngine.SpecialCharType.SCT_AllowedClosedTagOnly) != 0 && next == this.Evulator.RightTag)
+					|| ((this.Evulator.SpecialCharOption & TextEngine.SpecialCharType.SCT_AllowedNoParseWithParamTagOnly) != 0 && in_noparse && parent.HasFlag(TextEngine.TextElementFlags.TEF_NoParse_AllowParam)))
 				{
 					inspec = true;
 					continue;
@@ -5411,7 +5675,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     }
 				}
             }
-            if (this.Evulator.NoParseEnabled && this.in_noparse)
+            if (this.Evulator.NoParseEnabled && in_noparse)
             {
                 if (parfound)
                 {
@@ -5423,10 +5687,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     }
                     else if (cur == this.Evulator.RightTag)
                     {
-                        if (nparsetext.ToString().toLowerCase() == '/' + this.noparse_tag.toLowerCase())
+                        if (nparsetext.ToString().toLowerCase() == '/' + parent.ElemName.toLowerCase())
                         {
                             parfound = false;
                             this.pos = i;
+							this.directclose = true;
                             if (this.Evulator.TrimStartEnd)
                             {
                                 return text.ToString().Trim();
@@ -5447,6 +5712,16 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                 {
                     if (cur == this.Evulator.LeftTag)
                     {
+						if (next == this.Evulator.ParamChar && parent.HasFlag(TextElementFlags.TEF_NoParse_AllowParam))
+						{
+							this.pos = i - 1;
+							this.directclose = false;
+							if (this.Evulator.TrimStartEnd)
+							{
+								return text.ToString().Trim();
+							}
+							return text.ToString();
+						}
                         parfound = true;
                         continue;
                     }
