@@ -276,6 +276,19 @@ Common.ComputeActions = class ComputeActions
         }
         return res;
     }
+	static GetPropEx(item, vars, localvars = null)
+	{
+		let res = null;	
+        if (localvars != null)
+        {
+            res = ComputeActions.GetProp(item, localvars);
+        }
+        if (res == null || res.PropType == Common.PropType.Empty)
+        {		
+            res = ComputeActions.GetProp(item, vars);
+        }
+        return res;
+	}
     static GetProp(item, vars)
     {
 		let propObj = new Common.PropObject();
@@ -1569,7 +1582,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
 							if (propertyStr.length == 0) propertyStr = prevvalue;
 							else propertyStr += "." + prevvalue;
 							let allowget = this.AllowAccessProperty(propertyStr, Common.PropType.Indis);
-							if(allowget) lastPropObject = Common.ComputeActions.GetProp(prevvalue, varnew);
+							if(allowget) lastPropObject = Common.ComputeActions.GetPropEx(prevvalue, varnew, localvars);
 							else lastPropObject = null;
 							let prop = null;
 							if(lastPropObject != null) prop = lastPropObject.Value;
