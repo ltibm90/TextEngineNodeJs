@@ -62,8 +62,7 @@ const requestListener = function (req, res) {
 	globalInfo.user = userInfo;
 	te.GlobalParameters = globalInfo;
 	te.ParamNoAttrib = true;
-	te.TagInfos.Get("js").Flags = TextEngine.TextElementFlags.TEF_NoParse;
-	te.EvulatorTypes.SetType("js",() => new  TextEngine.Evulator.JSEvulator());
+	te.UseJSTag();
 	te.Parse();
 	res.end(te.Elements.EvulateValue().TextContent);
 }

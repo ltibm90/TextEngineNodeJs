@@ -382,6 +382,10 @@ Common.Extensions = class Extensions
 			if(this.length == 0) return null;
 			return this[0];
 		}
+		Array.prototype.Add = function(item)
+		{
+			return this.push(item);
+		}
 		Array.prototype.Contains = function(item, usefindindex = false)
 		{
 			if(usefindindex)
@@ -393,6 +397,13 @@ Common.Extensions = class Extensions
 			}
 			return this.indexOf(item) >= 0;
 		}
+		
+		Object.defineProperty(Array.prototype, 'Count', { get: function() 
+			{
+				return this.length; 
+			} 
+		});
+		
 		String.prototype.SubString = function(start, length)
 		{
 			return this.substr(start, length);
@@ -2292,6 +2303,15 @@ TextEngine.Evulator.BaseEvulator = class BaseEvulator
     {
         this.Evulator = evulator;
     }
+	EvulateAttributeName(attribute, additionalparams = null)
+	{
+		if (attribute == null || String.IsNullOrEmpty(attribute.Name)) return null;
+		if (attribute.ParDataName == null)
+		{
+			attribute.ParDataName = this.CreatePardecode(attribute.Name);
+		}
+		return this.EvulatePar(attribute.ParDataName, additionalparams);
+	}
     EvulateAttribute(attribute, additionalparams = null)
     {
         if (attribute == null || String.IsNullOrEmpty(attribute.Value)) return null;
@@ -2389,36 +2409,55 @@ TextEngine.Evulator.CallMacroEvulator = class CallMacroEvulator extends TextEngi
 	}
     Render(tag, vars)
     {
-
 		if(tag.ElemAttr.FirstAttribute == null || String.IsNullOrEmpty(tag.ElemAttr.FirstAttribute.Name)) return null;
-        let name = tag.ElemAttr.FirstAttribute.Name;
-        let cr = this.ConditionSuccess(tag, "if", vars);
+		let cr = this.ConditionSuccess(tag, "if", vars);
         if (!cr) return null;
+		let globalnoprint = tag.GetAttribute("noprint", "0") == "1";
+		let attrResult = this.EvulateAttributeName(tag.ElemAttr.FirstAttribute, vars);
+		let name = attrResult != null ? attrResult : "";
+		let teRes = new TextEngine.TextEvulateResult();
+		teRes.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
         if (String.IsNullOrEmpty(name)) return null;
-        let element = this.GetMacroElement(name);
-        if (element != null)
-        {
-            let newelement = new Common.KeyValues();
-            for (let i = 0; i < element.ElemAttr.Count; i++)
-            {
-				let elem = element.ElemAttr.GetItem(i);
-                if (elem.Name == "name") continue;
-                newelement.Set(elem.Name, this.EvulateAttribute(elem, vars));
-            }
-            for (let i = 1; i < tag.ElemAttr.Count; i++)
-            {
-                let key = tag.ElemAttr.GetItem(i);
-                newelement.Set(key.Name, this.EvulateAttribute(key, vars));
-            }
-            let result = element.EvulateValue(0, 0, newelement);
-            return result;
-        }
-        return null;
+		let elements = this.GetMacroElements(name);
+		for(let i = 0; i < elements.length; i++)
+		{
+			let element = elements[i];
+			if (element != null)
+			{
+				let newelement = new Common.KeyValues();
+				for (let i = 0; i < element.ElemAttr.Count; i++)
+				{
+					let elem = element.ElemAttr.GetItem(i);
+					if (elem.Name == "name" || elem.Name == "noprint") continue;
+					newelement.Set(elem.Name, this.EvulateAttribute(elem, vars));
+				}
+				let isnoprint = element.GetAttribute("noprint", "0") == "1";
+				for (let i = 1; i < tag.ElemAttr.Count; i++)
+				{
+					let key = tag.ElemAttr.GetItem(i);
+					if(key.Name == "noprint") continue;
+					newelement.Set(key.Name, this.EvulateAttribute(key, vars));
+				}
+				let result = element.EvulateValue(0, 0, newelement);
+				if (isnoprint) result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
+				if (elements.Count == 1) return (globalnoprint) ? null : result;
+				if(!globalnoprint && result.Result == TextEngine.TextEvulateResultEnum.EVULATE_TEXT)
+				{
+					teRes.TextContent += result.TextContent;
+				}
+			}
+		}
+
+        return globalnoprint ? null : teRes;
     }
     GetMacroElement(name)
     {
         return this.Evulator.SavedMacrosList.GetMacro(name);
     }
+	GetMacroElements(name)
+	{
+		return this.Evulator.SavedMacrosList.GetMacros(name);
+	}
 }
 //End TextEngine/Evulator/CmEvulator.js
 
@@ -2861,11 +2900,19 @@ TextEngine.Evulator.IncludeEvulator = class IncludeEvulator extends TextEngine.E
     }
 	Render_Default(tag, vars)
     {
-        let loc = this.GetLastDir() + this.EvulateAttribute(tag.ElemAttr.Get("name"), vars);
-        let parse = tag.GetAttribute("parse", "true");
-        if (!File.Exists(loc) || !this.ConditionSuccess(tag, "if", vars)) return null;
-        this.SetLocal("_DIR_", File.GetDirName(loc));
-        let content = File.ReadAllText(loc);
+		let parseType = 0;
+		if (tag.Data) parseType = tag.Data;
+		let globalnoprint = tag.GetAttribute("noprint", "0") == "1";
+        let parse = "";
+		let content = "";
+		if(parseType <= 0)
+		{
+			let loc = this.GetLastDir() + this.EvulateAttribute(tag.ElemAttr.Get("name"), vars);
+			parse = tag.GetAttribute("parse", "true");
+			if (!File.Exists(loc) || !this.ConditionSuccess(tag, "if", vars)) return null;
+			this.SetLocal("_DIR_", File.GetDirName(loc));
+			content = File.ReadAllText(loc);
+		}
         let result = new TextEngine.TextEvulateResult();
         if (parse == "false")
         {
@@ -2874,49 +2921,69 @@ TextEngine.Evulator.IncludeEvulator = class IncludeEvulator extends TextEngine.E
         }
         else
         {
-            let tempelem = new TextEngine.TextElement();
-			tempelem.ElemName = "#document";
-			tempelem.BaseEvulator = this.Evulator;
-			
-			let tempelem2 = new TextEngine.TextElement();
-			tempelem.ElemName = "#document";
-			tempelem.BaseEvulator = this.Evulator;
-            let xpath = tag.GetAttribute("xpath");
-            let xpathold = false;
-            if (String.IsNullOrEmpty(xpath))
-            {
-                xpath = tag.GetAttribute("xpath_old");
-                xpathold = true;
-            }
-            this.Evulator.Parse(tempelem2, content);
-            if (String.IsNullOrEmpty(xpath))
-            {
-                tempelem = tempelem2;
-            }
-            else
-            {
-                let elems = null;
-                if (!xpathold)
-                {
-                    elems = tempelem2.FindByXPath(xpath);
-                }
-                else
-                {
-                    elems = tempelem2.FindByXPathOld(xpath);
-                }
-                for (let i = 0; i < elems.Count; i++)
-                {
-                    elems.GetItem(i).Parent = tempelem;
-                    tempelem.SubElements.Add(elems.GetItem(i));
-                }
-            }
-            let cresult = tempelem.EvulateValue(0, 0, vars);
+			if(parseType <= 0)
+			{
+				let tempelem = new TextEngine.TextElement();
+				tempelem.ElemName = "#document";
+				tempelem.BaseEvulator = this.Evulator;
+				
+				let tempelem2 = new TextEngine.TextElement();
+				tempelem.ElemName = "#document";
+				tempelem.BaseEvulator = this.Evulator;
+				let xpath = tag.GetAttribute("xpath");
+				let xpathold = false;
+				if (String.IsNullOrEmpty(xpath))
+				{
+					xpath = tag.GetAttribute("xpath_old");
+					xpathold = true;
+				}
+				this.Evulator.Parse(tempelem2, content);
+				if (String.IsNullOrEmpty(xpath))
+				{
+					tempelem = tempelem2;
+					for (let i = 0; i < tempelem.SubElementsCount; i++)
+					{
+						tempelem.SubElements.GetItem(i).Parent = tag;
+						tag.SubElements.Add(tempelem.SubElements.GetItem(i));
+					}
+				}
+				else
+				{
+					let elems = null;
+					if (!xpathold)
+					{
+						elems = tempelem2.FindByXPath(xpath);
+					}
+					else
+					{
+						elems = tempelem2.FindByXPathOld(xpath);
+					}
+					for (let i = 0; i < elems.Count; i++)
+					{
+						elems.GetItem(i).Parent = tag;
+						tag.SubElements.Add(elems.GetItem(i));
+					}
+				}
+			}
+			else	
+			{
+				tag.Data = 1;
+				return null;
+			}
+            let cresult = tag.EvulateValue(0, 0, vars);
             result.TextContent += cresult.TextContent;
             if (cresult.Result == TextEngine.TextEvulateResultEnum.EVULATE_RETURN)
             {
                 result.Result = TextEngine.TextEvulateResultEnum.EVULATE_RETURN;
                 return result;
             }
+			else
+			{
+				if(globalnoprint)
+				{
+					return null;
+				}
+			}
             result.Result = TextEngine.TextEvulateResultEnum.EVULATE_TEXT;
         }
         return result;
@@ -2984,6 +3051,7 @@ TextEngine.Evulator.MacroEvulator = class MacroEvulator extends TextEngine.Evula
 	}
     Render(tag, vars)
     {
+		if(tag.ElemAttr.HasAttribute("preload")) return null;
         let name = tag.GetAttribute("name");
         if (!String.IsNullOrEmpty(name))
         {
@@ -3033,6 +3101,50 @@ TextEngine.Evulator.ParamEvulator = class ParamEvulator extends TextEngine.Evula
     }
 }
 //End TextEngine/Evulator/ParamEvulator.js
+
+//Start TextEngine/Evulator/RenderSectionEvulator.js
+TextEngine.Evulator.RenderSectionEvulator = class RenderSectionEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		let cr = this.ConditionSuccess(tag, "if", vars);
+		if (!cr) return null;
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
+		let attr = tag.ElemAttr.FirstAttribute;
+        let globalnoprint = tag.GetAttribute("noprint", "0") == "1";
+		if (attr)
+		{
+			let attrResult = this.EvulateAttributeName(attr, vars);
+			let name = attrResult != null ? attrResult.ToString() : "";
+			if (!String.IsNullOrEmpty(name))
+			{
+				let sections = tag.TagInfo.SingleData;
+				let list = sections.GetElements(function(m) { return m.ElemAttr.FirstAttribute != null && m.ElemAttr.FirstAttribute.Name == name;});
+				for (let i = 0; i < list.Count; i++)
+				{
+					let item = list.GetItem(i);
+					let r = item.EvulateValue();
+					let isnoprint = item.GetAttribute("noprint", "0") == "1";
+					if (isnoprint) r.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
+                    if (list.Count == 1) return  (globalnoprint) ? null : r;
+					if (!globalnoprint && result.Result == TextEngine.TextEvulateResultEnum.EVULATE_TEXT)
+					{
+						result.TextContent += r.TextContent;
+					}
+				}
+				result.Result = TextEvulateResultEnum.EVULATE_TEXT;
+			}
+
+		}
+		return (globalnoprint) ? null : result;
+    }
+}
+//End TextEngine/Evulator/RenderSectionEvulator.js
 
 //Start TextEngine/Evulator/RepeatEvulator.js
 TextEngine.Evulator.RepeatEvulator = class RepeatEvulator extends TextEngine.Evulator.BaseEvulator
@@ -3095,6 +3207,22 @@ TextEngine.Evulator.ReturnEvulator = class ReturnEvulator extends TextEngine.Evu
     }
 }
 //End TextEngine/Evulator/ReturnEvulator.js
+
+//Start TextEngine/Evulator/SectionEvulator.js
+TextEngine.Evulator.SectionEvulator = class SectionEvulator extends TextEngine.Evulator.BaseEvulator
+{
+	constructor()
+	{
+		super();
+	}
+    Render(tag, vars)
+    {
+		let result = new TextEngine.TextEvulateResult();
+		result.Result = TextEngine.TextEvulateResultEnum.EVULATE_NOACTION;
+        return result;
+    }
+}
+//End TextEngine/Evulator/SectionEvulator.js
 
 //Start TextEngine/Evulator/SetEvulator.js
 TextEngine.Evulator.SetEvulator = class SetEvulator extends TextEngine.Evulator.BaseEvulator
@@ -3380,11 +3508,11 @@ TextEngine.Utils.HtmlUtil = class HtmlUtil
 			if (exclude != null && exclude.indexOf(item.Name) >= 0) continue;
 			if(item.Value == null)
 			{
-				sb.Append(" " + item.Name);
+				sb.Append(" " + item.GetQuotedName());
 			}
 			else
 			{
-				sb.Append(" " + item.Name + "=\"" + item.Value.Replace("\"", "\\\"") + "\"");
+				sb.Append(" " + item.GetQuotedName() + "=\"" + item.Value.Replace("\"", "\\\"") + "\"");
 			}
 		}
 		return sb.ToString();
@@ -3402,12 +3530,122 @@ TextEngine.IntertwinedBracketsStateType =  {
 }
 //End TextEngine/Misc/IntertwinedBracketsStateType.js
 
-//Start TextEngine/Misc/SavedMacros.js
-TextEngine.SavedMacros = class SavedMacros
+//Start TextEngine/Text/TextElements.js
+TextEngine.TextElements = class TextElements extends Common.CollectionBase
 {
 	constructor()
 	{
+		super();
+		this.AutoInitialize = true;
+
+		
+	}
+	SortItems()
+	{
+		this.inner.sort(TextEngine.TextElements.CompareTextElements);
+	}
+	GetIndex(name)
+	{
+		for(let i = 0; i < this.GetCount(); i++)
+		{
+			let item = this.inner[i];
+			if(item.NameEquals(name))
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+	FindByXPath(xblock)
+	{
+		let elements = new TextEngine.TextElements();
+		for (let j = 0; j < this.Count; j++)
+		{
+			let elem = this.GetItem(j);
+			let nextelems = elem.FindByTextEngine.XPathClasses.XPathBlock(xblock);
+			for (let k = 0; k < nextelems.Count; k++)
+			{
+				if (elements.Contains(nextelems.GetItem(k))) continue;
+				elements.Add(nextelems.GetItem(k));
+			}
+		}
+		return elements;
+	}
+	static CompareTextElements(a, b)
+	{
+		if(a.Depth == b.Depth)
+		{
+			if(a.Index > b.Index)
+			{
+				return 1;
+			}
+			else if(b.Index > a.Index)
+			{
+				return -1;
+			}
+			return 0;
+		}
+		if(a.Depth > b.Depth)
+		{
+			let depthfark = Math.abs(a.Depth - b.Depth);
+			let next = a;
+			for (let i = 0; i < depthfark; i++)
+			{
+				next = next.Parent;
+			}
+			return CompareTextElements(next, b);
+		}
+		else
+		{
+			let depthfark = Math.Abs(a.Depth - b.Depth);
+			let next = b;
+			for (let i = 0; i < depthfark; i++)
+			{
+				next = next.Parent;
+			}
+			return CompareTextElements(a, next);
+		}
+	}
+	GetElementsByName(name)
+	{
+		return this.GetElements(m => m.NameEquals(name));
+	}
+	GetElements(predicate, limit = 0)
+	{
+		let list = [];
+		for (let i = 0; i < this.Count; i++)
+		{
+			if(predicate && predicate(this.GetItem(i)))
+			{
+				list.push(this.GetItem(i));
+				if (limit > 0 && list.length > limit) break; 
+			}
+		}
+		return list;
+	}
+	Exists(element)
+	{
+		for(let i = 0; i < this.Count; i++)
+		{
+			if(element == this.GetItem(i))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	
+}
+//End TextEngine/Text/TextElements.js
+
+//Start TextEngine/Misc/SavedMacros.js
+TextEngine.SavedMacros = class SavedMacros extends TextEngine.TextElements
+{
+	constructor()
+	{
+		super();
 		this.macros = [];
+		this.AllowMultipleNames = true;
 	}
     GetMacroIndex(name)
     {
@@ -3425,16 +3663,32 @@ TextEngine.SavedMacros = class SavedMacros
     }
     SetMacro(name, tag)
     {
-        let index = this.GetMacroIndex(name);
-        if (index == -1)
-        {
-            this.macros.push(tag);
-        }
-        else
-        {
-            this.macros[index] = tag;
-        }
+		if(this.Exists(tag))
+		{
+			return;
+		}
+		if(!this.AllowMultipleNames)
+		{
+			let index = this.GetMacroIndex(name);
+			if (index == -1)
+			{
+				this.Add(tag);
+			}
+			else
+			{
+				this.SetItem(index, tag);
+			}
+		}
+		else	
+		{
+			this.Add(tag);
+		}
+
     }
+	GetMacros(name)
+	{
+		return this.GetElements(m => m.GetAttribute("name") == name);
+	}	
 }
 //End TextEngine/Misc/SavedMacros.js
 
@@ -3480,6 +3734,8 @@ TextEngine.TextElement = class TextElement
 		this.AliasName = "";
 		this.NoAttrib = false;
 		this.TagAttrib = "";
+		this.DataDictionary = {};
+		this.Data = null;
 
 	}
 	get BaseEvulator()
@@ -4366,6 +4622,7 @@ TextEngine.TextElementAttribute = class TextElementAttribute
 		this._name = "";
 		this._value = "";
 		this.ParData = null;
+		this.ParDataName = null;
 	}
 	get Name()
 	{
@@ -4374,6 +4631,7 @@ TextEngine.TextElementAttribute = class TextElementAttribute
 	set Name(value)
 	{
 		this._name = value;
+		this.ParDataName = null;
 	}
 	get Value()
 	{
@@ -4383,6 +4641,15 @@ TextEngine.TextElementAttribute = class TextElementAttribute
 	{
 		this._value = value;
 		this.ParData = null;
+	}
+	
+    GetQuotedName()
+	{
+		if(this.Name.includes(" "))
+		{
+			return "\"" + this.Name.replaceAll("\"", "\\\"") + "\"";
+		}
+		return this.Name;
 	}
 }
 
@@ -4523,7 +4790,8 @@ TextEngine.TextElementFlags =  {
 	TEF_NoParse:  1 << 5,
 	TEF_AutoCloseIfSameTagFound: 1 << 6,
 	TEF_PreventAutoCreation: 1 << 7,
-	TEF_NoParse_AllowParam: 1 << 8
+	TEF_NoParse_AllowParam: 1 << 8,
+	TEF_AllowQuoteOnAttributeName: 1 << 9
 }
 
 //End TextEngine/Text/TextElementFlags.js
@@ -4540,6 +4808,8 @@ TextEngine.TextElementInfo = class TextElementInfo
 		this.OnTagOpened = null;
 		this.OnTagClosed = null;
 		this.OnTagAutoCreating = null;
+		this.CustomData = {};
+		this.SingleData = null;
 	}
 }
 
@@ -4604,85 +4874,6 @@ TextEngine.TextElementInfos = class TextElementInfos extends Common.CollectionBa
     }
 }
 //End TextEngine/Text/TextElementInfos.js
-
-//Start TextEngine/Text/TextElements.js
-TextEngine.TextElements = class TextElements extends Common.CollectionBase
-{
-	constructor()
-	{
-		super();
-		this.AutoInitialize = true;
-
-		
-	}
-	SortItems()
-	{
-		this.inner.sort(TextEngine.TextElements.CompareTextElements);
-	}
-	GetIndex(name)
-	{
-		for(let i = 0; i < this.GetCount(); i++)
-		{
-			let item = this.inner[i];
-			if(name == item.ElemName)
-			{
-				return i;
-			}
-		}
-		return -1;
-	}
-	FindByXPath(xblock)
-	{
-		let elements = new TextEngine.TextElements();
-		for (let j = 0; j < this.Count; j++)
-		{
-			let elem = this.GetItem(j);
-			let nextelems = elem.FindByTextEngine.XPathClasses.XPathBlock(xblock);
-			for (let k = 0; k < nextelems.Count; k++)
-			{
-				if (elements.Contains(nextelems.GetItem(k))) continue;
-				elements.Add(nextelems.GetItem(k));
-			}
-		}
-		return elements;
-	}
-	static CompareTextElements(a, b)
-	{
-		if(a.Depth == b.Depth)
-		{
-			if(a.Index > b.Index)
-			{
-				return 1;
-			}
-			else if(b.Index > a.Index)
-			{
-				return -1;
-			}
-			return 0;
-		}
-		if(a.Depth > b.Depth)
-		{
-			let depthfark = Math.abs(a.Depth - b.Depth);
-			let next = a;
-			for (let i = 0; i < depthfark; i++)
-			{
-				next = next.Parent;
-			}
-			return CompareTextElements(next, b);
-		}
-		else
-		{
-			let depthfark = Math.Abs(a.Depth - b.Depth);
-			let next = b;
-			for (let i = 0; i < depthfark; i++)
-			{
-				next = next.Parent;
-			}
-			return CompareTextElements(a, next);
-		}
-	}
-}
-//End TextEngine/Text/TextElements.js
 
 //Start TextEngine/Text/TextEvulateResult.js
 TextEngine.TextEvulateResultEnum =
@@ -4833,7 +5024,11 @@ TextEngine.TextEvulator = class TextEvulator
         this.InitAmpMaps();
         this.InitStockTagOptions();
     }
-
+	UseJSTag()
+	{
+		this.TagInfos.Get("js").Flags = TextEngine.TextElementFlags.TEF_NoParse;
+		this.EvulatorTypes.SetType("js",() => new  TextEngine.Evulator.JSEvulator());
+	}
     InitStockTagOptions()
     {
         //* default flags;
@@ -4844,7 +5039,7 @@ TextEngine.TextEvulator = class TextEvulator
         this.TagInfos.Get("break").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag;
         this.TagInfos.Get("continue").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag;
         this.TagInfos.Get("include").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
-        this.TagInfos.Get("cm").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag;
+        this.TagInfos.Get("cm").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_AllowQuoteOnAttributeName;
         this.TagInfos.Get("set").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
         this.TagInfos.Get("unset").Flags = TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
         this.TagInfos.Get("if").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag | TextEngine.TextElementFlags.TEF_ConditionalTag;
@@ -4852,6 +5047,48 @@ TextEngine.TextEvulator = class TextEvulator
 		this.TagInfos.Get("while").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
 		this.TagInfos.Get("do").Flags = TextEngine.TextElementFlags.TEF_NoAttributedTag;
 		this.TagInfos.Get("text").Flags = TextEngine.TextElementFlags.TEF_NoParse_AllowParam;
+		
+		this.TagInfos.Get("rendersection").SingleData = this.TagInfos.Get("section").SingleData = new TextEngine.TextElements();
+		this.TagInfos.Get("rendersection").Flags |= TextEngine.TextElementFlags.TEF_AutoClosedTag | TextEngine.TextElementFlags.TEF_AllowQuoteOnAttributeName;
+
+		this.TagInfos.Get("section").OnTagClosed = m =>
+		{
+			let ev = new TextEngine.Evulator.SectionEvulator();
+			ev.SetEvulator(m.BaseEvulator);
+			if (!ev.ConditionSuccess(m, "if")) return;
+
+			if (m.ElemAttr.FirstAttribute != null)
+			{
+				let sections = m.TagInfo.SingleData;
+				if(!sections.Exists(m))
+				{
+					sections.Add(m);
+				}
+			}
+			//tag.Parent.SubElements.Remove(tag);
+		};
+
+		this.TagInfos.Get("macro").OnTagClosed = m =>
+		{
+			if (!m.ElemAttr.HasAttribute("preload")) 
+				return;
+			let ev = new TextEngine.Evulator.MacroEvulator();
+			ev.SetEvulator(m.BaseEvulator);
+			if (!ev.ConditionSuccess(m, "if")) return;
+			var name = m.GetAttribute("name");
+			if (!string.IsNullOrEmpty(name))
+				m.BaseEvulator.SavedMacrosList.SetMacro(name, m);
+			//tag.Parent.SubElements.Remove(tag);
+		};
+		this.TagInfos.Get("include").OnTagClosed = m =>
+		{
+			if (!m.ElemAttr.HasAttribute("preload"))
+				return;
+			let ev = new TextEngine.Evulator.IncludeEvulator();
+			ev.SetEvulator(m.BaseEvulator);
+			ev.Render_Default(m, null);
+			//tag.Parent.SubElements.Remove(tag);
+		};
     }
     InitEvulator()
     {
@@ -4875,6 +5112,8 @@ TextEngine.TextEvulator = class TextEvulator
 		this.EvulatorTypes.SetType("while",() => new  TextEngine.Evulator.WhileEvulator());
 		this.EvulatorTypes.SetType("do",() => new  TextEngine.Evulator.DoEvulator());
 		this.EvulatorTypes.SetType("text",() => new  TextEngine.Evulator.TextParamEvulator());
+		this.EvulatorTypes.SetType("section",() => new  TextEngine.Evulator.SectionEvulator());
+		this.EvulatorTypes.SetType("rendersection",() => new  TextEngine.Evulator.RenderSectionEvulator());
     }
     InitAmpMaps()
     {
@@ -4953,11 +5192,11 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 	}
 	OnTagOpened(element)
 	{
-		if(element.TagInfo && element.TagInfo.OnTagOpened) element.TagInfo.OnTagOpened.apply(element);
+		if(element.TagInfo && element.TagInfo.OnTagOpened) element.TagInfo.OnTagOpened(element);
 	}
 	OnTagClosed(element)
 	{
-		if(element.TagInfo && element.TagInfo.OnTagClosed) element.TagInfo.OnTagClosed.apply(element);
+		if(element.TagInfo && element.TagInfo.OnTagClosed) element.TagInfo.OnTagClosed(element);
 	}
     Parse(baseitem, text)
     {
@@ -5446,14 +5685,24 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
             }
             if (cur == '"' || cur == '\'')
             {
-                if (!namefound || currentName.Length == 0)
+                if (!namefound)
                 {
                     if (this.Evulator.SurpressError) continue;
                     this.Evulator.IsParseMode = false;
                     throw new Error("Syntax Error");
                 }
+				if (currentName.Length == 0)
+				{
+					if(!tagElement.HasFlag(TextEngine.TextElementFlags.TEF_AllowQuoteOnAttributeName))
+					{
+						if (this.Evulator.SurpressError) continue;
+						this.Evulator.IsParseMode = false;
+						throw new Exception("Syntax Error");
+					}
+				}
                 if (inquot && cur == quotchar)
                 {
+					let clearcurrentname = true;
                     if (istagattrib)// if (currentName.ToString() == "##set_TAG_ATTR##")
                     {
                         tagElement.TagAttrib = current.ToString();
@@ -5465,7 +5714,15 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
 
                         tagElement.ElemAttr.SetAttribute(currentName.ToString(), current.ToString());
                     }
-                    currentName.Clear();
+					else if(currentName.Length == 0 && !tagElement.HasFlag(TextEngine.TextElementFlags.TEF_TagAttribonly))
+					{
+						clearcurrentname = false;
+						currentName.Append(current.ToString());
+					}
+					if(clearcurrentname)
+					{
+						currentName.Clear();
+					}
                     current.Clear();
                     inquot = false;
                     quoted = true;
@@ -5477,8 +5734,6 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     inquot = true;
                     continue;
                 }
-
-
             }
             if (!inquot)
             {
@@ -5587,6 +5842,7 @@ TextEngine.TextEvulatorParser = class TextEvulatorParser
                     {
 
                         tagElement.CloseState = TextEngine.TextElementClosedType.TECT_AUTOCLOSED;
+						this.OnTagClosed(tagElement);
                     }
                     this.pos = i;
                     return;
