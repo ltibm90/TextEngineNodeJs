@@ -66,9 +66,9 @@
 ## CM(Call Macro)Evulator and MacroEvulator
 ```csharp
             let evulator = new TextEngine.TextEvulator();
-            //evulator.Text = "{noprint}{macro name=macroname}{/macro}{noprint}{cm macroname}";
+            //evulator.Text = "{noprint}{macro name=macroname}{/macro}{noprint}{cm macro}";
             evulator.ParamNoAttrib = true;
-            evulator.Text = "{noprint}{macro name=macro1}This is macro line, param1: {%param1}, param2: {%param2}\r\n{/macro}{/noprint} {cm macro1}{cm macro1 param1=\"'test'\" param2=123456}";
+            evulator.Text = "{noprint}{macro name=macro1}This is macro line, param1: {%param1}, param2: {%param2}\r\n{/macro}{/noprint} {cm '"macro1"'}{cm '"macro1"' param1=\"'test'\" param2=123456}";
             evulator.Parse();
             //Output: This is macro line, param1: , param2: \r\nThis is macro line, param1: test, param2: 123456\r\n
             let result = evulator.Elements.EvulateValue().TextContent;
