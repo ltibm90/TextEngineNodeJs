@@ -3644,14 +3644,13 @@ TextEngine.SavedMacros = class SavedMacros extends TextEngine.TextElements
 	constructor()
 	{
 		super();
-		this.macros = [];
 		this.AllowMultipleNames = true;
 	}
     GetMacroIndex(name)
     {
-        for (let i = 0; i < this.macros.length; i++)
+        for (let i = 0; i < this.Count; i++)
         {
-            if (this.macros[i].GetAttribute("name") == name) return i;
+            if (this.GetItem(i).GetAttribute("name") == name) return i;
         }
         return -1;
     }
@@ -3659,7 +3658,7 @@ TextEngine.SavedMacros = class SavedMacros extends TextEngine.TextElements
     {
         let index = this.GetMacroIndex(name);
         if (index == -1) return null;
-        return this.macros[index];
+        return this.GetItem(index);
     }
     SetMacro(name, tag)
     {
