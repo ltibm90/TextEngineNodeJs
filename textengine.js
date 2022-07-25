@@ -377,62 +377,102 @@ Common.Extensions = class Extensions
 {
 	static Init()
 	{
-		Array.prototype.FirstOrDefault = function()
-		{
-			if(this.length == 0) return null;
-			return this[0];
-		}
-		Array.prototype.Add = function(item)
-		{
-			return this.push(item);
-		}
-		Array.prototype.Contains = function(item, usefindindex = false)
-		{
-			if(usefindindex)
-			{
-				return this.findIndex(function(v)
+		Object.defineProperty(Array.prototype, "FirstOrDefault", { 
+			value: function() {
+				if(this.length == 0) return null;
+				return this[0];
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(Array.prototype, "Add", { 
+			value: function(item) {
+				return this.push(item);
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(Array.prototype, "Contains", { 
+			value: function(item, usefindindex = false) {
+				if(usefindindex)
 				{
-					return v == item;
-				}) >= 0;
-			}
-			return this.indexOf(item) >= 0;
-		}
+					return this.findIndex(function(v)
+					{
+						return v == item;
+					}) >= 0;
+				}
+				return this.indexOf(item) >= 0;
+			},
+			writable: false,
+			enumerable : false
+		});
 		
 		Object.defineProperty(Array.prototype, 'Count', { get: function() 
 			{
 				return this.length; 
-			} 
+			},
+			enumerable : false
 		});
 		
-		String.prototype.SubString = function(start, length)
-		{
-			return this.substr(start, length);
-		}
-		String.prototype.IsNumeric = function()
-		{
-			return !isNaN(this);
-		}
-		String.prototype.Contains = function(str)
-		{
-			return this.includes(str);
-		}
+		
+		Object.defineProperty(String.prototype, "SubString", { 
+			value: function(start, length) {
+				return this.substr(start, length);
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(String.prototype, "IsNumeric", { 
+			value: function() {
+				return !isNaN(this);
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(String.prototype, "Contains", { 
+			value: function(str) {
+				return this.includes(str);
+			},
+			writable: false,
+			enumerable : false
+		});
+		
 		Object.defineProperty(String.prototype, 'Length', { get: function() 
 			{
 				return this.length; 
-			} 
+			},
+			enumerable : false
 		});
-		String.IsNullOrEmpty = function(item)
-		{
-			return item == null || item == undefined || item == "";
-		}
-		String.IsLetterOrDigit = function(item)
-		{
-			return item.match("^[A-Za-z0-9]+$");
-		}
-		String.prototype.IsBool = function()
-		{
-			return this == "true" || this == "false";
-		}
+		
+		Object.defineProperty(String, "IsNullOrEmpty", { 
+			value: function(item) {
+				return item == null || item == undefined || item == "";
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(String, "IsLetterOrDigit", { 
+			value: function(item) {
+				return item.match("^[A-Za-z0-9]+$");
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		Object.defineProperty(String.prototype, "IsBool", { 
+			value: function() {
+				return this == "true" || this == "false";
+			},
+			writable: false,
+			enumerable : false
+		});
+		
+		
 	}
 }
 
