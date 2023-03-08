@@ -1855,11 +1855,7 @@ ParDecoder.ParItem = class ParItem extends ParDecoder.InnerItem
                         {
                             for (let j = i + 1; j < this.InnerItems.Count; j++)
                             {
-                                let item = this.InnerItems[j];
-								if(!item)
-								{
-									item = this.InnerItems.inner[j];
-								}
+                                let item = this.InnerItems.GetItem(j);
                                 if (item.IsOperator && item.Value == ":")
                                 {
                                     i = j;
